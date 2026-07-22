@@ -143,7 +143,8 @@ function initResizer() {
   const curPct = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--detail-w')) || 35;
   const onMove = (e) => {
     if (!dragging) return;
-    const pct = Math.max(20, Math.min(70, startPct + (e.clientX - startX) / content.clientWidth * 100));
+    // resizer 在 list 与 detail 之间：向右拖应让 detail 变窄，故用减号
+    const pct = Math.max(20, Math.min(70, startPct - (e.clientX - startX) / content.clientWidth * 100));
     setPct(pct);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => invoke('save_detail_width', { pct }).catch(() => {}), 300);
