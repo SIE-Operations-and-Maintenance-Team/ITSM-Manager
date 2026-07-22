@@ -34,6 +34,9 @@ pub struct Config {
     /// 每视图分页大小（key=seachType 字符串，value=50/100/200）。空=全用 DEFAULT_PAGE_SIZE
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub view_page_sizes: HashMap<String, i64>,
+    /// 详情面板宽度百分比（20–70）；None = 默认 35%（由前端 CSS 变量回退）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_width_pct: Option<f64>,
 }
 
 impl Config {
@@ -48,6 +51,7 @@ impl Config {
             default_support_group_id: None,
             default_support_group_name: None,
             view_page_sizes: HashMap::new(),
+            detail_width_pct: None,
         }
     }
 
@@ -64,6 +68,10 @@ impl Config {
         if sec == 0 { 0 } else { sec.clamp(MIN_INTERVAL, MAX_INTERVAL) }
     }
 
+    pub fn clamp_detail_width(pct: Option<f64>) -> Option<f64> {
+        pct.map(|p| p.clamp(20.0, 70.0))
+    }
+
     pub fn dedup(mut self) -> Self {
         self.whitelist.sort_unstable();
         self.whitelist.dedup();
@@ -71,7 +79,11 @@ impl Config {
     }
 
     pub fn normalize(self) -> Self {
-        Self { interval_sec: Self::clamp_interval(self.interval_sec), ..self }.dedup()
+        Self {
+            interval_sec: Self::clamp_interval(self.interval_sec),
+            detail_width_pct: Self::clamp_detail_width(self.detail_width_pct),
+            ..self
+        }.dedup()
     }
 }
 
@@ -129,20 +141,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new() }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new() }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new() };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -157,5 +169,39 @@ mod tests {
         assert_eq!(c.default_customer_group_id, None);
         assert_eq!(c.default_requestor_id, None);
         assert!(c.view_page_sizes.is_empty());
+        assert_eq!(c.detail_width_pct, None);
+    }
+
+    #[test]
+    fn clamp_detail_width_below_min() {
+        assert_eq!(Config::clamp_detail_width(Some(15.0)), Some(20.0));
+    }
+
+    #[test]
+    fn clamp_detail_width_above_max() {
+        assert_eq!(Config::clamp_detail_width(Some(80.0)), Some(70.0));
+    }
+
+    #[test]
+    fn clamp_detail_width_in_range() {
+        assert_eq!(Config::clamp_detail_width(Some(42.5)), Some(42.5));
+    }
+
+    #[test]
+    fn clamp_detail_width_none_stays_none() {
+        assert_eq!(Config::clamp_detail_width(None), None);
+    }
+
+    #[test]
+    fn normalize_clamps_detail_width() {
+        let c = Config {
+            whitelist: vec![1], interval_sec: 300,
+            default_customer_group_id: None, default_customer_group_name: None,
+            default_requestor_id: None, default_requestor_name: None,
+            default_support_group_id: None, default_support_group_name: None,
+            view_page_sizes: HashMap::new(),
+            detail_width_pct: Some(10.0),
+        }.normalize();
+        assert_eq!(c.detail_width_pct, Some(20.0));
     }
 }
