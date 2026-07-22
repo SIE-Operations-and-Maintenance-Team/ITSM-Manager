@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ITSM 管理工具</title>
   <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="vendor/wangeditor/dist/css/style.css">
+    <script src="vendor/wangeditor/dist/index.js"></script>
 </head>
 <body>
   <div id="login-screen" class="screen">
@@ -57,6 +59,7 @@
         <div id="pagination" class="pagination" hidden></div>
         <div id="list-status" class="list-status"></div>
       </section>
+      <div class="resizer" id="resizer" title="拖动调整宽度，双击重置"></div>
       <aside class="detail-pane" id="detail-pane">
         <div class="detail-empty">点击左侧工单查看详情</div>
       </aside>
@@ -103,7 +106,8 @@
 
   <dialog id="reply-dialog" class="dialog">
     <h3>回复工单 — <span id="reply-code"></span></h3>
-    <textarea id="reply-text" rows="6" placeholder="回复内容"></textarea>
+    <div id="reply-toolbar" class="rich-toolbar"></div>
+    <div id="reply-editor" class="rich-editor"></div>
     <label class="row"><input type="checkbox" id="reply-private"> 内部备注（仅运维可见）</label>
     <div class="dialog-actions">
       <button class="btn" data-close>取消</button>
@@ -113,7 +117,8 @@
 
   <dialog id="resolve-dialog" class="dialog">
     <h3>解决工单 — <span id="resolve-code"></span></h3>
-    <textarea id="resolve-text" rows="6" placeholder="解决方案（必填）"></textarea>
+    <div id="resolve-toolbar" class="rich-toolbar"></div>
+    <div id="resolve-editor" class="rich-editor"></div>
     <div class="dialog-actions">
       <button class="btn" data-close>取消</button>
       <button id="resolve-submit" class="btn primary">确认解决</button>
@@ -146,7 +151,8 @@
       </label>
       <label class="field full">
         <span>详细描述 *</span>
-        <textarea id="budan-detail" rows="4" placeholder="必填"></textarea>
+        <div id="budan-toolbar" class="rich-toolbar"></div>
+        <div id="budan-editor" class="rich-editor"></div>
       </label>
       <label class="field">
         <span>客户组 *</span>

@@ -1,0 +1,1 @@
+wangEditor v5 (5.1.23) - @wangeditor/editor dist
