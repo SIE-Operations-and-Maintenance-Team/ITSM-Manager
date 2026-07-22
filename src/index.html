@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ITSM 管理工具</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="login-screen" class="screen">
+    <div class="login-box">
+      <h1>ITSM 管理工具</h1>
+      <p class="muted">未登录或授权已失效</p>
+      <button id="login-btn" class="btn primary">登录 ITSM</button>
+      <p id="login-tip" class="tip"></p>
+    </div>
+  </div>
+
+  <div id="main-screen" class="screen" hidden>
+    <header class="topbar">
+      <div class="views" id="views"></div>
+      <div class="user-info">
+        <span id="user-name" class="user-name"></span>
+        <select id="refresh-interval" title="自动刷新间隔">
+          <option value="0">不刷新</option>
+          <option value="30" selected>30s</option>
+          <option value="60">60s</option>
+          <option value="120">2min</option>
+          <option value="300">5min</option>
+        </select>
+        <button id="settings-btn" class="btn">设置</button>
+        <button id="refresh-btn" class="btn">刷新</button>
+        <button id="budan-btn" class="btn primary">补单</button>
+        <button id="logout-btn" class="btn">登出</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="list-pane">
+        <div class="table-wrap">
+          <table id="ticket-table">
+            <thead>
+              <tr>
+                <th>单号</th>
+                <th>主题</th>
+                <th>状态</th>
+                <th>优先级</th>
+                <th>客户组</th>
+                <th>提单人</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="ticket-body"></tbody>
+          </table>
+        </div>
+        <div id="pagination" class="pagination" hidden></div>
+        <div id="list-status" class="list-status"></div>
+      </section>
+      <aside class="detail-pane" id="detail-pane">
+        <div class="detail-empty">点击左侧工单查看详情</div>
+      </aside>
+    </main>
+  </div>
+
+  <dialog id="settings-dialog" class="dialog">
+    <h3>刷新设置</h3>
+    <div class="settings-section">
+      <h4>关注视图（自动刷新白名单）</h4>
+      <div id="settings-whitelist" class="whitelist-list"></div>
+    </div>
+    <div class="settings-section">
+      <h4>刷新间隔（秒，30–1800）</h4>
+      <input type="number" id="settings-interval" min="30" max="1800" step="30">
+      <span class="muted">5 分钟 = 300，0 仅在此对话框设为最小 30（暂停用顶部下拉"不刷新"）</span>
+    </div>
+    <div class="settings-section">
+      <h4>补单默认值（留空则每次手选）</h4>
+      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
+        <span>默认客户组</span>
+        <div class="ac-wrap">
+          <input id="settings-cg-input" placeholder="输入名称搜索" autocomplete="off">
+          <ul id="settings-cg-list" class="ac-list" hidden></ul>
+        </div>
+      </label>
+      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
+        <span>默认提单人</span>
+        <div class="ac-wrap">
+          <input id="settings-rq-input" placeholder="输入姓名搜索" autocomplete="off">
+          <ul id="settings-rq-list" class="ac-list" hidden></ul>
+        </div>
+      </label>
+      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
+        <span>默认支持组（补单 assign 必填）</span>
+        <select id="settings-sg-select"><option value="">请选择</option></select>
+      </label>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn" data-close>取消</button>
+      <button id="settings-submit" class="btn primary">保存</button>
+    </div>
+  </dialog>
+
+  <dialog id="reply-dialog" class="dialog">
+    <h3>回复工单 — <span id="reply-code"></span></h3>
+    <textarea id="reply-text" rows="6" placeholder="回复内容"></textarea>
+    <label class="row"><input type="checkbox" id="reply-private"> 内部备注（仅运维可见）</label>
+    <div class="dialog-actions">
+      <button class="btn" data-close>取消</button>
+      <button id="reply-submit" class="btn primary">提交回复</button>
+    </div>
+  </dialog>
+
+  <dialog id="resolve-dialog" class="dialog">
+    <h3>解决工单 — <span id="resolve-code"></span></h3>
+    <textarea id="resolve-text" rows="6" placeholder="解决方案（必填）"></textarea>
+    <div class="dialog-actions">
+      <button class="btn" data-close>取消</button>
+      <button id="resolve-submit" class="btn primary">确认解决</button>
+    </div>
+  </dialog>
+
+  <dialog id="suspend-dialog" class="dialog">
+    <h3>暂挂工单 — <span id="suspend-code"></span></h3>
+    <textarea id="suspend-text" rows="6" placeholder="暂挂原因"></textarea>
+    <div class="dialog-actions">
+      <button class="btn" data-close>取消</button>
+      <button id="suspend-submit" class="btn primary">确认暂挂</button>
+    </div>
+  </dialog>
+
+  <dialog id="budan-dialog" class="dialog dialog-wide">
+    <h3>补单</h3>
+    <div class="budan-grid">
+      <label class="field">
+        <span>服务目录 *</span>
+        <div class="cascader-row">
+          <select id="budan-l1"><option value="">一级</option></select>
+          <select id="budan-l2" disabled><option value="">二级</option></select>
+          <select id="budan-l3" disabled><option value="">三级</option></select>
+        </div>
+      </label>
+      <label class="field full">
+        <span>工单主题 *</span>
+        <input id="budan-subject" placeholder="必填">
+      </label>
+      <label class="field full">
+        <span>详细描述 *</span>
+        <textarea id="budan-detail" rows="4" placeholder="必填"></textarea>
+      </label>
+      <label class="field">
+        <span>客户组 *</span>
+        <div class="ac-wrap">
+          <input id="budan-cg-input" placeholder="输入名称搜索" autocomplete="off">
+          <ul id="budan-cg-list" class="ac-list" hidden></ul>
+        </div>
+      </label>
+      <label class="field">
+        <span>提单人 *</span>
+        <div class="ac-wrap">
+          <input id="budan-rq-input" placeholder="输入姓名搜索" autocomplete="off">
+          <ul id="budan-rq-list" class="ac-list" hidden></ul>
+        </div>
+      </label>
+      <label class="field">
+        <span>支持人（留空走默认）</span>
+        <div class="ac-wrap">
+          <input id="budan-sp-input" placeholder="输入姓名搜索" autocomplete="off">
+          <ul id="budan-sp-list" class="ac-list" hidden></ul>
+        </div>
+      </label>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn" data-close>取消</button>
+      <button id="budan-submit" class="btn primary">提交补单</button>
+    </div>
+  </dialog>
+
+  <dialog id="reassign-dialog" class="dialog">
+    <h3>转派工单 — <span id="reassign-code"></span></h3>
+    <label class="field"><span>支持组 *</span>
+      <select id="reassign-group"><option value="">请选择</option></select>
+    </label>
+    <label class="field"><span>支持人</span>
+      <select id="reassign-person" disabled><option value="">请先选支持组</option></select>
+    </label>
+    <label class="field"><span>处理工时（分钟）</span>
+      <input id="reassign-minutes" type="number" min="0" value="0">
+    </label>
+    <label class="field"><span>分派类型 *</span>
+      <select id="reassign-allot"><option value="">请选择</option></select>
+    </label>
+    <label class="field"><span>分派原因</span>
+      <textarea id="reassign-reason" rows="3" placeholder="可选"></textarea>
+    </label>
+    <div class="dialog-actions">
+      <button class="btn" data-close>取消</button>
+      <button id="reassign-submit" class="btn primary">确认转派</button>
+    </div>
+  </dialog>
+
+  <dialog id="cancel-dialog" class="dialog">
+    <h3>取消工单 — <span id="cancel-code"></span></h3>
+    <textarea id="cancel-reason" rows="5" placeholder="取消原因（建议填写）"></textarea>
+    <div class="dialog-actions">
+      <button class="btn" data-close>不取消</button>
+      <button id="cancel-submit" class="btn primary">确认取消</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="main.js"></script>
+</body>
+</html>

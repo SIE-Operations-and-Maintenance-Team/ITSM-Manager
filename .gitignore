@@ -1,0 +1,19 @@
+# Rust 构建产物
+src-tauri/target/
+
+# Tauri 生成
+src-tauri/gen/
+
+# Node
+node_modules/
+
+# SDD scratch（进度账本，本地用）
+.superpowers/
+
+# OS
+.DS_Store
+Thumbs.db
+
+docs/*
+doc/*
+.playwright-mcp/*

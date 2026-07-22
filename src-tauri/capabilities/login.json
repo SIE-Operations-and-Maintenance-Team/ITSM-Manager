@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "login-remote",
+  "description": "登录窗口 - 允许 ITSM 域调用 Tauri event 回传 token",
+  "windows": ["login"],
+  "remote": {
+    "urls": ["https://help.chinasie.com/*"]
+  },
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}
