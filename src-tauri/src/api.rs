@@ -1,4 +1,5 @@
 // ITSM API 封装（纯 HTTP 层，不依赖 Tauri State）
+use serde::Serialize;
 use serde_json::{json, Value};
 
 const API_BASE: &str = "https://api-itsm.chinasie.com";
@@ -106,23 +107,95 @@ pub async fn claim(client: &reqwest::Client, token: &str, id: &str) -> Result<Va
         .map_err(|e| format!("解析失败: {}", e))
 }
 
+/// 上传结果（序列化回前端）
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadResult {
+    pub file_id: String,
+    pub file_path: String,
+    pub file_name: String,
+}
+
+/// multipart POST 基础函数（header 同 do_post，body 为 multipart form）
+pub async fn do_post_multipart(
+    client: &reqwest::Client,
+    token: &str,
+    path: &str,
+    form: reqwest::multipart::Form,
+) -> Result<Value, String> {
+    let url = format!("{}{}", API_BASE, path);
+    client
+        .post(&url)
+        .header("authorization", token)
+        .header("language", "zh#cn")
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("上传失败: {}", e))?
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("解析失败: {}", e))
+}
+
+/// 纯解析：上传响应 → UploadResult（成功码 800）
+pub fn parse_upload_response(v: &Value) -> Result<UploadResult, String> {
+    let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+    if code != 800 {
+        return Err(format!("上传失败: {}", v.get("msg").and_then(|m| m.as_str()).unwrap_or("")));
+    }
+    let data = v.get("data").ok_or_else(|| "上传响应缺 data".to_string())?;
+    let file_id = data.get("fileId").and_then(|x| x.as_str()).ok_or_else(|| "上传响应缺 fileId".to_string())?.to_string();
+    let file_path = data.get("filePath").and_then(|x| x.as_str()).ok_or_else(|| "上传响应缺 filePath".to_string())?.to_string();
+    let file_name = data.get("sourceFileName").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    Ok(UploadResult { file_id, file_path, file_name })
+}
+
+/// 上传单个附件到 ITSM（预上传，bizId 空）
+pub async fn upload_attachment(
+    client: &reqwest::Client,
+    token: &str,
+    bytes: Vec<u8>,
+    file_name: &str,
+    mime: &str,
+) -> Result<UploadResult, String> {
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(file_name.to_string())
+        .mime_str(mime)
+        .map_err(|e| format!("mime 错误: {}", e))?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+    let v = do_post_multipart(client, token, "/api/file/iot-base-attachment/single/file-upload?bizId=", form).await?;
+    parse_upload_response(&v)
+}
+
+/// 纯构造：回复请求 body（便于单测）
+pub fn reply_body(
+    order_id: &str,
+    detail_html: &str,
+    file_ids: &[String],
+    is_private: bool,
+    order_type: &str,
+) -> Value {
+    json!({
+        "params": {
+            "orderId": order_id, "profile": "",
+            "fileIds": file_ids,
+            "orderType": order_type,
+            "detail": detail_html,
+            "isPrivate": if is_private { 1 } else { 0 },
+            "operationSource": "ITSM_DEVOPS", "replyType": 1
+        }
+    })
+}
+
 pub async fn reply(
     client: &reqwest::Client,
     token: &str,
     order_id: &str,
-    detail: &str,
+    detail_html: &str,
+    file_ids: &[String],
     is_private: bool,
     order_type: &str,
 ) -> Result<Value, String> {
-    let body = json!({
-        "params": {
-            "orderId": order_id, "profile": "", "fileIds": [],
-            "orderType": order_type,
-            "detail": format!("<p>{}</p>", detail),
-            "isPrivate": if is_private { 1 } else { 0 },
-            "operationSource": "ITSM_DEVOPS", "replyType": 1
-        }
-    });
+    let body = reply_body(order_id, detail_html, file_ids, is_private, order_type);
     do_post(client, token, "/api/itsm/incidentService/order-reply", body).await
 }
 
@@ -145,7 +218,7 @@ pub async fn change_status(
     .ok_or_else(|| "未取到工单数据".to_string())?;
     if let Some(obj) = data.as_object_mut() {
         obj.insert("status".into(), Value::String(status.to_string()));
-        obj.insert("solution".into(), Value::String(format!("<p>{}</p>", content)));
+        obj.insert("solution".into(), Value::String(content.to_string()));
         if is_resolve {
             obj.insert("statusName".into(), Value::String("已解决".into()));
             obj.insert("endCode".into(), Value::String("1".into()));
@@ -496,5 +569,49 @@ mod tests {
         let (arr, count) = parse_tickets_response(&v).unwrap();
         assert_eq!(count, 3);
         assert_eq!(arr, json!([]));
+    }
+
+    #[test]
+    fn parse_upload_ok() {
+        let v = json!({"code":800,"data":{"fileId":"123","filePath":"https://x/y.png","sourceFileName":"a.png"},"msg":"操作成功"});
+        let r = parse_upload_response(&v).unwrap();
+        assert_eq!(r.file_id, "123");
+        assert_eq!(r.file_path, "https://x/y.png");
+        assert_eq!(r.file_name, "a.png");
+    }
+
+    #[test]
+    fn parse_upload_wrong_code_is_err() {
+        let v = json!({"code":500,"msg":"失败"});
+        assert!(parse_upload_response(&v).is_err());
+    }
+
+    #[test]
+    fn parse_upload_missing_data_is_err() {
+        let v = json!({"code":800});
+        assert!(parse_upload_response(&v).is_err());
+    }
+
+    #[test]
+    fn parse_upload_missing_fileid_is_err() {
+        let v = json!({"code":800,"data":{"filePath":"https://x/y.png"}});
+        assert!(parse_upload_response(&v).is_err());
+    }
+
+    #[test]
+    fn reply_body_carries_file_ids_and_html() {
+        let body = reply_body("OID", "<p>hi <strong>x</strong></p>", &["a".into(), "b".into()], false, "1");
+        let p = body.get("params").unwrap();
+        assert_eq!(p.get("detail").unwrap(), "<p>hi <strong>x</strong></p>");
+        assert_eq!(p.get("fileIds").unwrap(), &json!(["a", "b"]));
+        assert_eq!(p.get("isPrivate").unwrap(), &json!(0));
+    }
+
+    #[test]
+    fn reply_body_empty_file_ids() {
+        let body = reply_body("OID", "<p>x</p>", &[], true, "1");
+        let p = body.get("params").unwrap();
+        assert_eq!(p.get("fileIds").unwrap(), &json!([]));
+        assert_eq!(p.get("isPrivate").unwrap(), &json!(1));
     }
 }
