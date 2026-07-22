@@ -31,6 +31,151 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 const fmt = (s) => s ? String(s).replace('T', ' ').slice(0, 16) : '-';
 const stripHtml = (h) => String(h || '').replace(/<[^>]+>/g, '').trim();
 
+// 富文本白名单清洗：防 <script>/on* 事件/javascript: 等执行
+const ALLOWED_TAGS = new Set(['P','BR','STRONG','B','EM','I','U','S','STRIKE','UL','OL','LI','A','IMG','SPAN','DIV','H2','H3','H4','PRE','CODE','BLOCKQUOTE']);
+const DROP_TAGS = new Set(['SCRIPT','STYLE','NOSCRIPT','IFRAME','OBJECT','EMBED','LINK','META','BASE','FORM','INPUT','BUTTON','SVG']);
+const SAFE_ATTR = new Set(['href','src','alt','title','target','colspan','rowspan','start','type']);
+function sanitizeHtml(html) {
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const walk = (node) => {
+    [...node.childNodes].forEach(child => {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const tag = child.tagName;
+        if (DROP_TAGS.has(tag)) { node.removeChild(child); return; }
+        // 先剥离危险属性
+        [...child.attributes].forEach(attr => {
+          const name = attr.name.toLowerCase();
+          const val = String(attr.value);
+          if (name.startsWith('on') || !SAFE_ATTR.has(name)) {
+            child.removeAttribute(attr.name);
+          } else if ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(val)) {
+            child.removeAttribute(attr.name);
+          }
+        });
+        // 先递归清理后代，再决定保留或解包
+        walk(child);
+        if (!ALLOWED_TAGS.has(tag)) {
+          while (child.firstChild) node.insertBefore(child.firstChild, child);
+          node.removeChild(child);
+        }
+      } else if (child.nodeType === Node.COMMENT_NODE) {
+        node.removeChild(child);
+      }
+    });
+  };
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result || '');
+      resolve(s.slice(s.indexOf(',') + 1));
+    };
+    r.onerror = () => reject('读取文件失败');
+    r.readAsDataURL(file);
+  });
+}
+
+// 富文本编辑器（wangEditor v5）。懒创建：首次 openDialog 时实例化并缓存。
+const richEditors = {};
+function createRichEditor(toolbarId, contentId) {
+  const fileIds = new Set();
+  const toolbar = wangEditor.createToolbar({
+    selector: '#' + toolbarId,
+    mode: 'default',
+    config: {
+      excludeKeys: ['headerSelect','group','todo','emotion','insertVideo','insertTable','codeBlock','divide','quote','color','bgColor','justifyLeft','justifyRight','justifyCenter','justifyJustify','indent','unIndent','lineHeight'],
+    }
+  });
+  const editor = wangEditor.createEditor({
+    selector: '#' + contentId,
+    mode: 'default',
+    html: '<p><br></p>',
+    config: {
+      placeholder: '请输入内容',
+      MENU_CONF: {
+        uploadImage: {
+          maxFileSize: 10 * 1024 * 1024,
+          allowedFileTypes: ['image/*'],
+          async customUpload(file, insertFn) {
+            try {
+              const b64 = await fileToBase64(file);
+              const r = await invoke('upload_attachment', { fileName: file.name, mime: file.type || 'image/png', fileBase64: b64 });
+              fileIds.add(r.file_id);
+              insertFn(r.file_path, r.file_name || file.name, r.file_path);
+            } catch (e) {
+              toast('图片上传失败: ' + e, 'error');
+            }
+          }
+        }
+      }
+    }
+  });
+  return {
+    getHtml() {
+      const h = editor.getHtml();
+      return h === '<p><br></p>' ? '' : h;
+    },
+    reset() { editor.setHtml('<p><br></p>'); fileIds.clear(); },
+    getFileIds() { return Array.from(fileIds); },
+  };
+}
+function ensureEditor(kind) {
+  if (!window.wangEditor) { toast('富文本组件未加载', 'error'); return null; }
+  if (!richEditors[kind]) richEditors[kind] = createRichEditor(kind + '-toolbar', kind + '-editor');
+  return richEditors[kind];
+}
+
+// 详情面板宽度拖动（20%–70%）+ 持久化
+function initResizer() {
+  const resizer = $('resizer');
+  const content = document.querySelector('.content');
+  if (!resizer || !content) return;
+  let dragging = false, startX = 0, startPct = 0, saveTimer = null;
+  const setPct = (pct) => {
+    document.documentElement.style.setProperty('--detail-w', pct + '%');
+  };
+  const curPct = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--detail-w')) || 35;
+  const onMove = (e) => {
+    if (!dragging) return;
+    const pct = Math.max(20, Math.min(70, startPct + (e.clientX - startX) / content.clientWidth * 100));
+    setPct(pct);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => invoke('save_detail_width', { pct }).catch(() => {}), 300);
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    resizer.classList.remove('active');
+    clearTimeout(saveTimer);
+    invoke('save_detail_width', { pct: curPct() }).catch(() => {});
+  };
+  resizer.addEventListener('mousedown', (e) => {
+    dragging = true; startX = e.clientX; startPct = curPct();
+    resizer.classList.add('active');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    e.preventDefault();
+  });
+  resizer.addEventListener('dblclick', () => {
+    setPct(35);
+    invoke('save_detail_width', { pct: 35 }).catch(() => {});
+  });
+}
+
+async function applyDetailWidth() {
+  try {
+    const cfg = await invoke('get_config', { seachType: currentSeachType });
+    const pct = cfg.detail_width_pct ?? 35;
+    document.documentElement.style.setProperty('--detail-w', pct + '%');
+  } catch (e) { /* 默认 35% */ }
+}
+
 function ageText(unixSec) {
   if (!unixSec) return '未知';
   const mins = Math.floor((Date.now() / 1000 - unixSec) / 60);
@@ -839,4 +984,6 @@ $('settings-submit').addEventListener('click', async () => {
   }
 });
 
+initResizer();
+applyDetailWidth();
 init();
