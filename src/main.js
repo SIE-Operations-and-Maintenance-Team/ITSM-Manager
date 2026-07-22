@@ -83,13 +83,7 @@ function fileToBase64(file) {
 const richEditors = {};
 function createRichEditor(toolbarId, contentId) {
   const fileIds = new Set();
-  const toolbar = wangEditor.createToolbar({
-    selector: '#' + toolbarId,
-    mode: 'default',
-    config: {
-      excludeKeys: ['headerSelect','group','todo','emotion','insertVideo','insertTable','codeBlock','divide','quote','color','bgColor','justifyLeft','justifyRight','justifyCenter','justifyJustify','indent','unIndent','lineHeight'],
-    }
-  });
+  // wangEditor v5：必须先建 editor，再建 toolbar 并把 editor 传入，否则 toolbar 报 editor is null
   const editor = wangEditor.createEditor({
     selector: '#' + contentId,
     mode: 'default',
@@ -112,6 +106,14 @@ function createRichEditor(toolbarId, contentId) {
           }
         }
       }
+    }
+  });
+  const toolbar = wangEditor.createToolbar({
+    selector: '#' + toolbarId,
+    editor,
+    mode: 'default',
+    config: {
+      excludeKeys: ['headerSelect','group','todo','emotion','insertVideo','insertTable','codeBlock','divide','quote','color','bgColor','justifyLeft','justifyRight','justifyCenter','justifyJustify','indent','unIndent','lineHeight'],
     }
   });
   return {
