@@ -192,6 +192,8 @@ pub fn run() {
             commands::invalidate_after_write,
             commands::get_config,
             commands::save_config,
+            commands::upload_attachment,
+            commands::save_detail_width,
             open_login,
         ])
         .run(tauri::generate_context!())

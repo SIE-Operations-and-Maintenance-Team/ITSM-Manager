@@ -124,12 +124,13 @@ pub async fn claim(id: String, state: State<'_, AppState>) -> Result<Value, Stri
 pub async fn reply(
     order_id: String,
     detail: String,
+    file_ids: Vec<String>,
     is_private: bool,
     order_type: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let token = state::get_token(&state)?;
-    api::reply(&state.client, &token, &order_id, &detail, is_private, &order_type).await
+    api::reply(&state.client, &token, &order_id, &detail, &file_ids, is_private, &order_type).await
 }
 
 #[tauri::command]
@@ -251,4 +252,28 @@ pub fn save_config(config: Config, app: AppHandle) -> Result<(), String> {
     let _ = app.emit("config-changed", &config);
     app.state::<SchedulerHandle>().0.restart(app.clone(), fallback);
     Ok(())
+}
+
+/// 上传回复/解决/补单的图片附件：前端传 base64，解码后 multipart 上传 ITSM
+#[tauri::command]
+pub async fn upload_attachment(
+    file_name: String,
+    mime: String,
+    file_base64: String,
+    state: State<'_, AppState>,
+) -> Result<api::UploadResult, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&file_base64)
+        .map_err(|e| format!("base64 解码失败: {}", e))?;
+    let token = state::get_token(&state)?;
+    api::upload_attachment(&state.client, &token, bytes, &file_name, &mime).await
+}
+
+/// 持久化详情面板宽度百分比（仅写 config.json，不重启 scheduler）
+#[tauri::command]
+pub fn save_detail_width(pct: f64, app: AppHandle) -> Result<(), String> {
+    let mut cfg = config::load(&app, state::DEFAULT_SEACH_TYPE);
+    cfg.detail_width_pct = Some(pct);
+    config::save(&app, &cfg)
 }
