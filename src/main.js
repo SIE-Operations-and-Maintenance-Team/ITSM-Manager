@@ -466,7 +466,7 @@ function renderDetail(d, replies) {
   replies.forEach(r => {
     html += `<div class="reply-item ${r.isPrivate ? 'internal' : ''}">
       <div class="reply-meta">${esc(r.createdByName || r.createdBy || '系统')} · ${fmt(r.creationDate)}${r.isPrivate ? ' · 内部' : ''}</div>
-      <div class="reply-content">${esc(stripHtml(r.detail))}</div></div>`;
+      <div class="reply-content">${sanitizeHtml(r.detail)}</div></div>`;
   });
   pane.innerHTML = html;
   pane.querySelectorAll('button[data-act]').forEach(btn => {
@@ -479,8 +479,8 @@ function renderDetail(d, replies) {
 function handleAction(act, t) {
   currentAction = { act, t };
   if (act === 'claim') return doClaim(t);
-  if (act === 'reply') return openDialog('reply-dialog', 'reply-code', 'reply-text', t.incidentCode);
-  if (act === 'resolve') return openDialog('resolve-dialog', 'resolve-code', 'resolve-text', t.incidentCode);
+  if (act === 'reply') return openRichDialog('reply', 'reply-dialog', 'reply-code', t.incidentCode);
+  if (act === 'resolve') return openRichDialog('resolve', 'resolve-dialog', 'resolve-code', t.incidentCode);
   if (act === 'suspend') return openDialog('suspend-dialog', 'suspend-code', 'suspend-text', t.incidentCode);
   if (act === 'reassign') return openReassign(t);
   if (act === 'cancel') return openCancel(t);
@@ -490,6 +490,13 @@ function handleAction(act, t) {
 function openDialog(dlgId, codeSpanId, textId, code) {
   $(codeSpanId).textContent = code;
   $(textId).value = '';
+  $(dlgId).showModal();
+}
+
+function openRichDialog(kind, dlgId, codeSpanId, code) {
+  $(codeSpanId).textContent = code;
+  const ed = ensureEditor(kind);
+  if (ed) ed.reset();
   $(dlgId).showModal();
 }
 
@@ -511,10 +518,12 @@ async function doClaim(t) {
 
 $('reply-submit').addEventListener('click', async () => {
   const { t } = currentAction;
-  const text = $('reply-text').value.trim();
-  if (!text) return toast('请输入回复内容');
+  const ed = ensureEditor('reply');
+  if (!ed) return;
+  const html = ed.getHtml();
+  if (!html) return toast('请输入回复内容');
   try {
-    const r = await invoke('reply', { orderId: t.incidentId, detail: text, isPrivate: $('reply-private').checked, orderType: t.orderType || '1' });
+    const r = await invoke('reply', { orderId: t.incidentId, detail: html, fileIds: ed.getFileIds(), isPrivate: $('reply-private').checked, orderType: t.orderType || '1' });
     if (r.code === 800) {
       toast('回复成功', 'success');
       $('reply-dialog').close();
@@ -526,11 +535,13 @@ $('reply-submit').addEventListener('click', async () => {
 
 $('resolve-submit').addEventListener('click', async () => {
   const { t } = currentAction;
-  const text = $('resolve-text').value.trim();
-  if (!text) return toast('请输入解决方案');
+  const ed = ensureEditor('resolve');
+  if (!ed) return;
+  const html = ed.getHtml();
+  if (!html) return toast('请输入解决方案');
   if (!confirm(`确认解决 ${t.incidentCode}？`)) return;
   try {
-    const r = await invoke('resolve', { id: t.incidentId, solution: text });
+    const r = await invoke('resolve', { id: t.incidentId, solution: html });
     if (r.code === 800) {
       toast('解决成功', 'success');
       $('resolve-dialog').close();
@@ -618,7 +629,7 @@ async function openBudan() {
   budanTemplate = null;
   budanSel = { serviceType: '', serviceSubType: '', customerGroupId: '', customerGroupName: '', requestorId: '', requestorName: '', supportById: '', supportByName: '' };
   $('budan-subject').value = '';
-  $('budan-detail').value = '';
+  const budanEd = ensureEditor('budan'); if (budanEd) budanEd.reset();
   $('budan-cg-input').value = '';
   $('budan-rq-input').value = '';
   $('budan-sp-input').value = '';
@@ -717,10 +728,12 @@ attachAutocomplete('budan-sp-input', 'budan-sp-list',
 
 $('budan-submit').addEventListener('click', async () => {
   const subject = $('budan-subject').value.trim();
-  const detail = $('budan-detail').value.trim();
+  const budanEd = ensureEditor('budan');
+  if (!budanEd) return;
+  const detailHtml = budanEd.getHtml();
   if (!budanSel.serviceType || !budanSel.serviceSubType) return toast('请选完三级服务目录');
   if (!subject) return toast('请填工单主题');
-  if (!detail) return toast('请填详细描述');
+  if (!detailHtml) return toast('请填详细描述');
   if (!budanSel.customerGroupId) return toast('请选择客户组');
   if (!budanSel.requestorId) return toast('请选择提单人');
   // 支持组（save body 必填）— 优先配置默认，其次提单人选中的客户组默认支持组
@@ -737,7 +750,8 @@ $('budan-submit').addEventListener('click', async () => {
     serviceType: budanSel.serviceType,
     serviceSubType: budanSel.serviceSubType,
     orderSubject: subject,
-    detail: `<p>${esc(detail)}</p>`,
+    detail: detailHtml,
+    fileIds: budanEd.getFileIds(),
     priority: '3',
     contactCustomerGroup: budanSel.customerGroupId,
     requestor: budanSel.requestorId,
@@ -751,7 +765,6 @@ $('budan-submit').addEventListener('click', async () => {
     supportName: budanSel.supportByName || '',
     relatedorderList: [],
     createTemplateId: budanTemplate?.id || '',
-    fileIds: [],
   };
   try {
     const r = await invoke('save_replenish', { params });
@@ -966,8 +979,10 @@ $('settings-submit').addEventListener('click', async () => {
   const interval_sec = Math.max(30, Math.min(1800, parseInt($('settings-interval').value) || 300));
   if (whitelist.length === 0) return toast('至少选一个视图');
   try {
+    const cur = await invoke('get_config', { seachType: currentSeachType });
     await invoke('save_config', {
       config: {
+        ...cur,
         whitelist, interval_sec,
         default_customer_group_id: settingsDefaults.cgId || null,
         default_customer_group_name: settingsDefaults.cgName || null,
