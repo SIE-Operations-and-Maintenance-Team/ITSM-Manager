@@ -1,5 +1,5 @@
 // ITSM API 封装（纯 HTTP 层，不依赖 Tauri State）
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const API_BASE: &str = "https://api-itsm.chinasie.com";
@@ -52,14 +52,77 @@ pub async fn list_views(client: &reqwest::Client, token: &str) -> Result<Value, 
     .await
 }
 
+/// 列表搜索参数（全可选；未填字段不加入请求 params）
+/// 字段名按 ITSM find-pagination 后端 key（camelCase），前端 invoke 时用 camelCase 传。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchParams {
+    pub code_and_subject: Option<String>,
+    pub status: Option<String>,
+    pub creation_date_begin: Option<String>,
+    pub creation_date_end: Option<String>,
+    pub contact_customer_group_name: Option<String>,
+}
+
+impl SearchParams {
+    /// 全字段均为空 → 视作无搜索条件（走缓存默认逻辑）
+    pub fn is_empty(&self) -> bool {
+        let blank = |s: &Option<String>| s.as_deref().map_or(true, |v| v.is_empty());
+        blank(&self.code_and_subject)
+            && blank(&self.status)
+            && blank(&self.creation_date_begin)
+            && blank(&self.creation_date_end)
+            && blank(&self.contact_customer_group_name)
+    }
+
+    /// 合成 params 子对象（仅含非空字段；不含 seachType，由调用方注入）
+    pub fn to_params(&self) -> Value {
+        let mut m = serde_json::Map::new();
+        if let Some(s) = self.code_and_subject.as_deref().filter(|s| !s.is_empty()) {
+            m.insert("codeAndSubject".into(), Value::String(s.to_string()));
+        }
+        if let Some(s) = self.status.as_deref().filter(|s| !s.is_empty()) {
+            m.insert("status".into(), Value::String(s.to_string()));
+        }
+        let b = self.creation_date_begin.as_deref().filter(|s| !s.is_empty());
+        let e = self.creation_date_end.as_deref().filter(|s| !s.is_empty());
+        // 日期需成对（UI 层强制成对输入），单边不发送避免后端歧义
+        if let (Some(b), Some(e)) = (b, e) {
+            m.insert(
+                "creationDateSearch".into(),
+                Value::Array(vec![Value::String(b.to_string()), Value::String(e.to_string())]),
+            );
+        }
+        if let Some(s) = self.contact_customer_group_name.as_deref().filter(|s| !s.is_empty()) {
+            m.insert("contactCustomerGroupName".into(), Value::String(s.to_string()));
+        }
+        Value::Object(m)
+    }
+}
+
+/// 把 search 字段 merge 进已含 seachType 的 params map
+fn merge_search(params: &mut serde_json::Map<String, Value>, search: Option<&SearchParams>) {
+    if let Some(s) = search {
+        if let Value::Object(m) = s.to_params() {
+            for (k, v) in m {
+                params.insert(k, v);
+            }
+        }
+    }
+}
+
 pub async fn list_tickets(
     client: &reqwest::Client,
     token: &str,
     seach_type: i64,
+    search: Option<&SearchParams>,
 ) -> Result<Value, String> {
+    let mut params = serde_json::Map::new();
+    params.insert("seachType".into(), json!(seach_type));
+    merge_search(&mut params, search);
     let body = json!({
         "pageIndex": 1, "pageRows": 200,
-        "params": { "seachType": seach_type },
+        "params": params,
         "orderByBean": { "attributeName": "", "sortType": "" }
     });
     do_post(client, token, "/api/itsm/incidentService/find-pagination", body).await
@@ -461,10 +524,14 @@ pub async fn fetch_tickets_raw(
     seach_type: i64,
     page_index: i64,
     page_rows: i64,
+    search: Option<&SearchParams>,
 ) -> Result<(Value, i64), FetchError> {
+    let mut params = serde_json::Map::new();
+    params.insert("seachType".into(), json!(seach_type));
+    merge_search(&mut params, search);
     let body = json!({
         "pageIndex": page_index, "pageRows": page_rows,
-        "params": { "seachType": seach_type },
+        "params": params,
         "orderByBean": { "attributeName": "", "sortType": "" }
     });
     let url = format!("{}/api/itsm/incidentService/find-pagination", API_BASE);
@@ -501,6 +568,60 @@ pub async fn fetch_tickets_raw(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn search_params_empty_when_all_blank() {
+        assert!(SearchParams::default().is_empty());
+        assert!(SearchParams {
+            code_and_subject: Some("".into()),
+            status: Some("".into()),
+            creation_date_begin: None,
+            creation_date_end: Some("".into()),
+            contact_customer_group_name: Some("".into()),
+        }
+        .is_empty());
+    }
+
+    #[test]
+    fn search_params_not_empty_when_any_filled() {
+        assert!(!SearchParams { status: Some("Suspend".into()), ..Default::default() }.is_empty());
+    }
+
+    #[test]
+    fn search_params_to_params_full() {
+        let s = SearchParams {
+            code_and_subject: Some("kw".into()),
+            status: Some("Suspend".into()),
+            creation_date_begin: Some("2026-01-01".into()),
+            creation_date_end: Some("2026-07-22".into()),
+            contact_customer_group_name: Some("cg".into()),
+        };
+        let v = s.to_params();
+        assert_eq!(v["codeAndSubject"], json!("kw"));
+        assert_eq!(v["status"], json!("Suspend"));
+        assert_eq!(v["creationDateSearch"], json!(["2026-01-01", "2026-07-22"]));
+        assert_eq!(v["contactCustomerGroupName"], json!("cg"));
+    }
+
+    #[test]
+    fn search_params_to_params_skips_blanks_and_single_date() {
+        // 单边日期不发送
+        let s = SearchParams {
+            creation_date_begin: Some("2026-01-01".into()),
+            creation_date_end: Some("".into()),
+            code_and_subject: Some("kw".into()),
+            ..Default::default()
+        };
+        let v = s.to_params();
+        assert!(v.get("creationDateSearch").is_none());
+        assert_eq!(v["codeAndSubject"], json!("kw"));
+    }
+
+    #[test]
+    fn search_params_to_params_empty_yields_empty_object() {
+        let v = SearchParams::default().to_params();
+        assert!(v.as_object().map(|m| m.is_empty()).unwrap_or(false));
+    }
 
     #[test]
     fn classify_401_is_auth() {

@@ -46,6 +46,17 @@ html, body { margin: 0; height: 100vh; font-family: "Microsoft YaHei", "Segoe UI
 /* 主内容 */
 .content { display: flex; height: calc(100vh - 48px); }
 .list-pane { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+/* 搜索条 */
+.search-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.search-bar .search-input { padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text); background: #fff; }
+.search-bar .search-input:focus { outline: none; border-color: var(--primary); }
+.search-bar .search-select { padding: 5px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text); background: #fff; cursor: pointer; }
+.search-bar .search-date { padding: 5px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; color: var(--text); background: #fff; }
+.search-bar .search-dash { color: var(--muted); }
+.search-bar .ac-wrap { position: relative; }
+.search-bar .s-kw { min-width: 220px; }
+.search-bar .s-cg { min-width: 160px; }
 .table-wrap { flex: 1; overflow: auto; }
 table { width: 100%; border-collapse: collapse; background: var(--panel); }
 thead th { position: sticky; top: 0; background: #f0f2f5; padding: 8px 10px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; z-index: 1; }
@@ -89,12 +100,23 @@ tbody tr.selected { background: #e8f1fd; }
 .reply-content img { max-width: 100%; height: auto; }
 
 /* 弹窗 */
-dialog { border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: 480px; box-shadow: 0 8px 32px rgba(0,0,0,.15); }
+dialog { border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: 480px; max-height: 90vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,.15); }
 dialog::backdrop { background: rgba(0,0,0,.3); }
 dialog h3 { margin: 0 0 12px; font-size: 15px; }
+
+/* 可拖动 + 可缩放弹窗（回复/解决/补单） */
+/* display 限定 [open]：避免覆盖 UA 的 dialog:not([open]){display:none} 导致关闭后仍可见；
+   margin:0 覆盖 UA margin:auto 居中机制，否则设 left/top 后仍被 margin 重算偏移（拖动不准） */
+.dialog-resizable { resize: both; overflow: hidden; margin: 0; min-width: 360px; min-height: 240px; max-width: 95vw; max-height: 90vh; }
+.dialog-resizable[open] { display: flex; flex-direction: column; }
+.dialog-resizable h3 { cursor: move; user-select: none; margin: -20px -20px 12px; padding: 20px 20px 0; }
+.dialog-resizable > .dialog-actions, .dialog-resizable > .row, .dialog-resizable > label.field { flex: none; }
+#reply-dialog, #resolve-dialog { width: 720px; }
 dialog textarea { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 13px; resize: vertical; }
 dialog .row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font-size: 12px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+.whitelist-list { max-height: 200px; overflow-y: auto; }
 
 /* toast */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 8px 20px; border-radius: 4px; z-index: 9999; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
@@ -102,15 +124,17 @@ dialog .row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font
 .toast.success { background: var(--success); }
 
 /* 补单 / 转派 通用字段 */
-.dialog-wide { width: 640px; }
+.dialog-wide { width: 820px; }
 dialog label.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
 dialog label.field > span { font-weight: 600; }
 dialog label.field.full { grid-column: 1 / -1; }
-dialog label.field input, dialog label.field select, dialog label.field textarea { padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 13px; color: var(--text); background: #fff; }
+dialog label.field input, dialog label.field select, dialog label.field textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 13px; color: var(--text); background: #fff; }
 dialog label.field input:focus, dialog label.field select:focus, dialog label.field textarea:focus { outline: none; border-color: var(--primary); }
-.budan-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; max-height: 65vh; overflow-y: auto; padding-right: 4px; }
+.field-grid { display: grid; gap: 6px 14px; }
+.field-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+.field-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .cascader-row { display: flex; gap: 6px; }
-.cascader-row select { flex: 1; min-width: 0; }
+.cascader-row select { flex: 1; min-width: 0; width: 0; }
 
 /* autocomplete */
 .ac-wrap { position: relative; }
@@ -124,6 +148,6 @@ dialog label.field input:focus, dialog label.field select:focus, dialog label.fi
 /* 富文本编辑器 */
 .rich-toolbar { border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0; }
 .rich-editor { border: 1px solid var(--border); border-radius: 0 0 4px 4px; }
-.rich-editor .w-e-text-container { min-height: 140px; }
+.rich-editor .w-e-text-container { min-height: 220px; }
 .rich-editor .w-e-text-placeholder { color: var(--muted); }
 dialog .rich-editor { margin-top: 4px; }

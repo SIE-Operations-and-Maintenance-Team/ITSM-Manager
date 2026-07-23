@@ -39,6 +39,19 @@
 
     <main class="content">
       <section class="list-pane">
+        <div class="search-bar">
+          <button id="search-clear" class="btn small" title="清空所有搜索条件">清空</button>
+          <input id="s-kw" class="search-input s-kw" placeholder="单号/主题/提单人/支持人" autocomplete="off">
+          <select id="s-status" class="search-select"><option value="">全部状态</option></select>
+          <input id="s-date-begin" type="date" class="search-date">
+          <span class="search-dash">-</span>
+          <input id="s-date-end" type="date" class="search-date">
+          <div class="ac-wrap">
+            <input id="s-cg" class="search-input s-cg" placeholder="客户组名称" autocomplete="off">
+            <ul id="s-cg-list" class="ac-list" hidden></ul>
+          </div>
+          <button id="search-btn" class="btn primary small">搜索</button>
+        </div>
         <div class="table-wrap">
           <table id="ticket-table">
             <thead>
@@ -68,6 +81,11 @@
 
   <dialog id="settings-dialog" class="dialog">
     <h3>刷新设置</h3>
+    <div class="settings-section">
+      <h4>应用行为</h4>
+      <label class="row"><input type="checkbox" id="settings-autostart"> 开机自启</label>
+      <label class="row"><input type="checkbox" id="settings-min-tray"> 关闭窗口时最小化到托盘（不退出）</label>
+    </div>
     <div class="settings-section">
       <h4>关注视图（自动刷新白名单）</h4>
       <div id="settings-whitelist" class="whitelist-list"></div>
@@ -104,7 +122,7 @@
     </div>
   </dialog>
 
-  <dialog id="reply-dialog" class="dialog">
+  <dialog id="reply-dialog" class="dialog dialog-resizable">
     <h3>回复工单 — <span id="reply-code"></span></h3>
     <div id="reply-toolbar" class="rich-toolbar"></div>
     <div id="reply-editor" class="rich-editor"></div>
@@ -115,7 +133,7 @@
     </div>
   </dialog>
 
-  <dialog id="resolve-dialog" class="dialog">
+  <dialog id="resolve-dialog" class="dialog dialog-resizable">
     <h3>解决工单 — <span id="resolve-code"></span></h3>
     <div id="resolve-toolbar" class="rich-toolbar"></div>
     <div id="resolve-editor" class="rich-editor"></div>
@@ -134,10 +152,10 @@
     </div>
   </dialog>
 
-  <dialog id="budan-dialog" class="dialog dialog-wide">
+  <dialog id="budan-dialog" class="dialog dialog-wide dialog-resizable">
     <h3>补单</h3>
-    <div class="budan-grid">
-      <label class="field">
+    <div class="field-grid cols-3">
+      <label class="field full">
         <span>服务目录 *</span>
         <div class="cascader-row">
           <select id="budan-l1"><option value="">一级</option></select>
@@ -148,11 +166,6 @@
       <label class="field full">
         <span>工单主题 *</span>
         <input id="budan-subject" placeholder="必填">
-      </label>
-      <label class="field full">
-        <span>详细描述 *</span>
-        <div id="budan-toolbar" class="rich-toolbar"></div>
-        <div id="budan-editor" class="rich-editor"></div>
       </label>
       <label class="field">
         <span>客户组 *</span>
@@ -176,6 +189,11 @@
         </div>
       </label>
     </div>
+    <label class="field full">
+      <span>详细描述 *</span>
+      <div id="budan-toolbar" class="rich-toolbar"></div>
+      <div id="budan-editor" class="rich-editor"></div>
+    </label>
     <div class="dialog-actions">
       <button class="btn" data-close>取消</button>
       <button id="budan-submit" class="btn primary">提交补单</button>
@@ -184,21 +202,23 @@
 
   <dialog id="reassign-dialog" class="dialog">
     <h3>转派工单 — <span id="reassign-code"></span></h3>
-    <label class="field"><span>支持组 *</span>
-      <select id="reassign-group"><option value="">请选择</option></select>
-    </label>
-    <label class="field"><span>支持人</span>
-      <select id="reassign-person" disabled><option value="">请先选支持组</option></select>
-    </label>
-    <label class="field"><span>处理工时（分钟）</span>
-      <input id="reassign-minutes" type="number" min="0" value="0">
-    </label>
-    <label class="field"><span>分派类型 *</span>
-      <select id="reassign-allot"><option value="">请选择</option></select>
-    </label>
-    <label class="field"><span>分派原因</span>
-      <textarea id="reassign-reason" rows="3" placeholder="可选"></textarea>
-    </label>
+    <div class="field-grid cols-2">
+      <label class="field"><span>支持组 *</span>
+        <select id="reassign-group"><option value="">请选择</option></select>
+      </label>
+      <label class="field"><span>支持人</span>
+        <select id="reassign-person" disabled><option value="">请先选支持组</option></select>
+      </label>
+      <label class="field"><span>处理工时（分钟）</span>
+        <input id="reassign-minutes" type="number" min="0" value="0">
+      </label>
+      <label class="field"><span>分派类型 *</span>
+        <select id="reassign-allot"><option value="">请选择</option></select>
+      </label>
+      <label class="field full"><span>分派原因</span>
+        <textarea id="reassign-reason" rows="3" placeholder="可选"></textarea>
+      </label>
+    </div>
     <div class="dialog-actions">
       <button class="btn" data-close>取消</button>
       <button id="reassign-submit" class="btn primary">确认转派</button>

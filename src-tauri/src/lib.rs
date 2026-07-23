@@ -5,9 +5,10 @@ mod commands;
 mod config;
 mod scheduler;
 mod state;
+mod tray;
 
 use state::{AppState, Creds};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 
 /// 打开登录窗口（嵌入 ITSM 登录页，通过本地 HTTP server + image beacon 回传 token）
 #[tauri::command]
@@ -144,6 +145,11 @@ fn save_creds_internal(app: &tauri::AppHandle, creds: Creds) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             token: std::sync::Mutex::new(None),
             tenant_id: std::sync::Mutex::new(state::DEFAULT_TENANT.into()),
@@ -160,6 +166,23 @@ pub fn run() {
             app.state::<commands::SchedulerHandle>()
                 .0
                 .restart(handle, state::DEFAULT_SEACH_TYPE);
+
+            tray::build(app.handle())?;
+
+            // 启动隐藏判断：autostart 注册时带 --hidden；命中则不 show 主窗口
+            let start_hidden = std::env::args().any(|a| a == "--hidden");
+            if !start_hidden {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                }
+            }
+
+            // config 变更 → 刷新托盘勾选/label
+            let h = app.handle().clone();
+            app.handle().listen("config-changed", move |_| {
+                tray::refresh_state(&h);
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -192,10 +215,27 @@ pub fn run() {
             commands::invalidate_after_write,
             commands::get_config,
             commands::save_config,
+            commands::set_autostart,
             commands::upload_attachment,
             commands::save_detail_width,
             open_login,
         ])
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let cfg = config::load(app, state::DEFAULT_SEACH_TYPE);
+                if cfg.minimize_to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    if !cfg.tray_hint_shown {
+                        tray::show_hint_once(app);
+                    }
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

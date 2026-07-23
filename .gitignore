@@ -17,3 +17,5 @@ Thumbs.db
 docs/*
 doc/*
 .playwright-mcp/*
+
+CLAUDE.md

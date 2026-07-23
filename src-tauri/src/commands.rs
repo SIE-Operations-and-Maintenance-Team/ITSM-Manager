@@ -65,35 +65,52 @@ pub async fn list_views(state: State<'_, AppState>) -> Result<Value, String> {
 #[tauri::command]
 pub async fn list_tickets(seach_type: i64, state: State<'_, AppState>) -> Result<Value, String> {
     let token = state::get_token(&state)?;
-    api::list_tickets(&state.client, &token, seach_type).await
+    api::list_tickets(&state.client, &token, seach_type, None).await
 }
 
-/// 读列表（分页）：缓存命中且页码/页大小匹配则返缓存；否则实时拉对应页并落盘
+/// 读列表（分页）：缓存命中且页码/页大小匹配则返缓存；否则实时拉对应页并落盘。
+/// search 非空（搜索态）：跳过读写缓存，直拉后端，结果标记 search=true。
 #[tauri::command]
 pub async fn list_tickets_cached(
     seach_type: i64,
     page_index: i64,
     page_size: i64,
+    search: Option<api::SearchParams>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Value, String> {
-    if let Some(c) = cache::read_tickets(&app, seach_type, page_index, page_size) {
-        return Ok(json!({
-            "from_cache": true,
-            "fetched_at": c.fetched_at,
-            "count": c.count,
-            "page_index": c.page_index,
-            "page_size": c.page_size,
-            "data": c.data
-        }));
+    let has_search = search.as_ref().map_or(false, |s| !s.is_empty());
+    if !has_search {
+        if let Some(c) = cache::read_tickets(&app, seach_type, page_index, page_size) {
+            return Ok(json!({
+                "from_cache": true,
+                "fetched_at": c.fetched_at,
+                "count": c.count,
+                "page_index": c.page_index,
+                "page_size": c.page_size,
+                "data": c.data,
+                "search": false,
+            }));
+        }
     }
     let token = state::get_token(&state)?;
-    let (data, count) = api::fetch_tickets_raw(&state.client, &token, seach_type, page_index, page_size)
+    let (data, count) = api::fetch_tickets_raw(&state.client, &token, seach_type, page_index, page_size, search.as_ref())
         .await
         .map_err(|e| format!("加载失败: {:?}", e))?;
     let now = state::now_unix();
-    cache::write_tickets(&app, seach_type, page_index, page_size, &data, count, now).ok();
-    Ok(json!({ "from_cache": false, "fetched_at": now, "count": count, "page_index": page_index, "page_size": page_size, "data": data }))
+    // 仅默认列表（非搜索态）落盘缓存
+    if !has_search {
+        cache::write_tickets(&app, seach_type, page_index, page_size, &data, count, now).ok();
+    }
+    Ok(json!({
+        "from_cache": false,
+        "fetched_at": now,
+        "count": count,
+        "page_index": page_index,
+        "page_size": page_size,
+        "data": data,
+        "search": has_search,
+    }))
 }
 
 /// 前端上报当前页码（scheduler 据此刷新用户正在看的页）
@@ -246,7 +263,11 @@ pub fn get_config(seach_type: i64, app: AppHandle) -> Result<Config, String> {
 }
 
 #[tauri::command]
-pub fn save_config(config: Config, app: AppHandle) -> Result<(), String> {
+pub fn save_config(mut config: Config, app: AppHandle) -> Result<(), String> {
+    // interval > 0 时同步最近有效间隔，供托盘"恢复"取值
+    if config.interval_sec > 0 {
+        config.last_interval_sec = config.interval_sec;
+    }
     let fallback = config.whitelist.first().copied().unwrap_or(state::DEFAULT_SEACH_TYPE);
     config::save(&app, &config)?;
     let _ = app.emit("config-changed", &config);
@@ -276,4 +297,27 @@ pub fn save_detail_width(pct: f64, app: AppHandle) -> Result<(), String> {
     let mut cfg = config::load(&app, state::DEFAULT_SEACH_TYPE);
     cfg.detail_width_pct = Some(pct);
     config::save(&app, &cfg)
+}
+
+/// 切换开机自启：plugin 改注册表 + 落 config + emit config-changed。
+/// 公共函数，IPC 命令与托盘菜单共用。
+pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let mgr = app.autolaunch();
+    if enabled {
+        mgr.enable().map_err(|e| format!("启用自启失败: {}", e))?;
+    } else {
+        mgr.disable().map_err(|e| format!("禁用自启失败: {}", e))?;
+    }
+    let mut cfg = config::load(app, state::DEFAULT_SEACH_TYPE);
+    cfg.autostart_enabled = enabled;
+    config::save(app, &cfg)?;
+    let _ = app.emit("config-changed", &cfg);
+    Ok(())
+}
+
+/// IPC 包装
+#[tauri::command]
+pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
+    apply_autostart(&app, enabled)
 }

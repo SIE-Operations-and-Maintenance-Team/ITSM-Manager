@@ -46,7 +46,7 @@ pub async fn refresh_single(app: &AppHandle, seach_type: i64) -> Option<RefreshE
     drop(st);
     let cfg = crate::config::load(app, seach_type);
     let page_size = cfg.page_size_for(seach_type);
-    match api::fetch_tickets_raw(&client, &token, seach_type, page_index, page_size).await {
+    match api::fetch_tickets_raw(&client, &token, seach_type, page_index, page_size, None).await {
         Ok((data, count)) => {
             let now = state::now_unix();
             crate::cache::write_tickets(app, seach_type, page_index, page_size, &data, count, now).ok();

@@ -5,6 +5,8 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:event:default"
+    "core:event:default",
+    "autostart:default",
+    "notification:default"
   ]
 }

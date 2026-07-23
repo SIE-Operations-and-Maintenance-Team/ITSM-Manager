@@ -11,6 +11,7 @@ let currentAction = null;
 let allViews = [];
 let pageSize = 50;          // 当前视图页大小：50/100/200，切视图时从 config 读
 let currentPage = 1;        // 当前页码，从 1 开始
+let currentSearch = null;   // 搜索态（跨视图/刷新保持）；null 表无搜索条件
 
 // 读取某视图持久化的 pageSize，未配置或非法回退 50
 async function getPageSizeFor(st) {
@@ -25,6 +26,9 @@ const STATUS_NAME = {
   Create: '新建', Assigning: '待受理', Processing: '处理中', Suspend: '暂挂',
   Resolved: '已解决', Closed: '已关闭', Delete: '已取消', Revoked: '已撤回', Draft: '草稿', Wait: '等待中'
 };
+
+// 搜索状态下拉选项（STATUS_NAME 反转：value=后端 code，label=中文）
+const STATUS_OPTIONS = Object.entries(STATUS_NAME).map(([k, v]) => ({ value: k, label: v }));
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -82,7 +86,6 @@ function fileToBase64(file) {
 // 富文本编辑器（wangEditor v5）。懒创建：首次 openDialog 时实例化并缓存。
 const richEditors = {};
 function createRichEditor(toolbarId, contentId) {
-  const fileIds = new Set();
   // wangEditor v5：必须先建 editor，再建 toolbar 并把 editor 传入，否则 toolbar 报 editor is null
   const editor = wangEditor.createEditor({
     selector: '#' + contentId,
@@ -98,7 +101,6 @@ function createRichEditor(toolbarId, contentId) {
             try {
               const b64 = await fileToBase64(file);
               const r = await invoke('upload_attachment', { fileName: file.name, mime: file.type || 'image/png', fileBase64: b64 });
-              fileIds.add(r.file_id);
               insertFn(r.file_path, r.file_name || file.name, r.file_path);
             } catch (e) {
               toast('图片上传失败: ' + e, 'error');
@@ -121,8 +123,7 @@ function createRichEditor(toolbarId, contentId) {
       const h = editor.getHtml();
       return h === '<p><br></p>' ? '' : h;
     },
-    reset() { editor.setHtml('<p><br></p>'); fileIds.clear(); },
-    getFileIds() { return Array.from(fileIds); },
+    reset() { editor.setHtml('<p><br></p>'); },
   };
 }
 function ensureEditor(kind) {
@@ -168,6 +169,80 @@ function initResizer() {
   resizer.addEventListener('dblclick', () => {
     setPct(35);
     invoke('save_detail_width', { pct: 35 }).catch(() => {});
+  });
+}
+
+// 可拖动 + 可缩放弹窗几何持久化（localStorage，纯 UI 偏好，不走后端 config）
+function applyDialogGeom(dlg) {
+  if (!dlg) return;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let g = null;
+  try { g = JSON.parse(localStorage.getItem('dlg-geom-v2-' + dlg.id) || ''); } catch (e) {}
+  // 尺寸：有记录用记录，否则用 CSS 默认宽度
+  if (g) {
+    dlg.style.width = Math.min(g.w, vw - 20) + 'px';
+    dlg.style.height = Math.min(g.h, vh - 20) + 'px';
+  }
+  // 位置：每次弹出居中（模态弹窗不记忆位置）
+  const w = dlg.offsetWidth || 720;
+  const h = dlg.offsetHeight || 400;
+  dlg.style.left = Math.max(0, Math.round((vw - w) / 2)) + 'px';
+  dlg.style.top = Math.max(0, Math.round((vh - h) / 2)) + 'px';
+}
+
+function persistDialogGeom(dlg) {
+  if (!dlg) return;
+  const r = dlg.getBoundingClientRect();
+  try {
+    // 只记忆尺寸，不记忆位置（每次弹出居中）
+    localStorage.setItem('dlg-geom-v2-' + dlg.id, JSON.stringify({
+      w: Math.round(r.width), h: Math.round(r.height),
+    }));
+  } catch (e) { /* localStorage 不可用时静默跳过 */ }
+}
+
+// 标题栏 h3 作拖动手柄
+function makeDraggable(dlg) {
+  const handle = dlg.querySelector('h3');
+  if (!handle) return;
+  let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+  const onMove = (e) => {
+    if (!dragging) return;
+    const nx = Math.max(0, Math.min(window.innerWidth - 60, ox + e.clientX - sx));
+    const ny = Math.max(0, Math.min(window.innerHeight - 40, oy + e.clientY - sy));
+    dlg.style.left = nx + 'px';
+    dlg.style.top = ny + 'px';
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = '';
+    persistDialogGeom(dlg);
+  };
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true; sx = e.clientX; sy = e.clientY;
+    const r = dlg.getBoundingClientRect();
+    ox = r.left; oy = r.top;
+    // 锁定当前位置为显式 left/top，后续 mousemove 才能基于此偏移
+    dlg.style.left = ox + 'px'; dlg.style.top = oy + 'px';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// 打开可拖缩弹窗：showModal 后立即应用几何（不依赖 toggle 事件，WebView2 时序更可靠）
+function openDlg(dlg) {
+  dlg.showModal();
+  applyDialogGeom(dlg);
+}
+
+function enableResizableDialogs() {
+  document.querySelectorAll('dialog.dialog-resizable').forEach(dlg => {
+    makeDraggable(dlg);
+    // 鼠标松开时持久化尺寸（resize 手柄/标题栏拖动结束；此时 dialog 仍 visible，rect 有效）
+    dlg.addEventListener('mouseup', () => persistDialogGeom(dlg));
   });
 }
 
@@ -244,7 +319,11 @@ $('logout-btn').addEventListener('click', async () => {
   showLogin();
 });
 
-$('refresh-btn').addEventListener('click', () => invoke('trigger_refresh'));
+$('refresh-btn').addEventListener('click', () => {
+  // 搜索态：保持搜索重新拉取；非搜索态：原 scheduler 强制刷新
+  if (currentSearch) loadTickets(false);
+  else invoke('trigger_refresh');
+});
 
 $('refresh-interval').addEventListener('change', async (e) => {
   const sec = parseInt(e.target.value);
@@ -302,7 +381,7 @@ async function switchView(v, el) {
 // 工单列表（真分页：按 currentPage/pageSize 向后端要对应页）
 async function loadTickets(silent = false) {
   try {
-    const res = await invoke('list_tickets_cached', { seachType: currentSeachType, pageIndex: currentPage, pageSize });
+    const res = await invoke('list_tickets_cached', { seachType: currentSeachType, pageIndex: currentPage, pageSize, search: currentSearch });
     currentTickets = res.data || [];
     totalCount = res.count ?? currentTickets.length;
     // 越界回退：当前页空但总数>0（末尾删空），clamp 到有效末页重拉一次
@@ -312,9 +391,11 @@ async function loadTickets(silent = false) {
       return loadTickets(silent);
     }
     renderTable();
-    const ageLabel = res.from_cache ? `缓存 · ${ageText(res.fetched_at)}` : '实时';
+    const isSearch = res.search === true;
+    const ageLabel = isSearch ? '搜索结果' : (res.from_cache ? `缓存 · ${ageText(res.fetched_at)}` : '实时');
     $('list-status').textContent = `${currentViewName}：共 ${totalCount} 条 · 第 ${currentPage}/${totalPages()} 页 · ${ageLabel} · ${new Date().toLocaleTimeString()}`;
-    if (!silent) {
+    // 搜索态不触发 scheduler 后台刷新（scheduler 只刷默认列表，与搜索解耦）
+    if (!silent && !isSearch) {
       invoke('trigger_refresh', { seachType: currentSeachType });
     }
   } catch (e) {
@@ -322,6 +403,65 @@ async function loadTickets(silent = false) {
     toast('加载失败: ' + e, 'error');
     $('list-status').textContent = '加载失败: ' + e;
   }
+}
+
+// ============ 列表搜索 ============
+
+// 读搜索条控件 → 条件对象。返回：null=无条件；undefined=校验失败（已 toast）；object=有条件
+function collectSearch() {
+  const begin = $('s-date-begin').value;
+  const end = $('s-date-end').value;
+  if ((begin && !end) || (!begin && end)) {
+    toast('请选择完整的提单日期范围', 'error');
+    return undefined;
+  }
+  const kw = $('s-kw').value.trim();
+  const status = $('s-status').value;
+  const cg = $('s-cg').value.trim();
+  if (!kw && !status && !begin && !cg) return null;
+  return {
+    codeAndSubject: kw || undefined,
+    status: status || undefined,
+    creationDateBegin: begin || undefined,
+    creationDateEnd: end || undefined,
+    contactCustomerGroupName: cg || undefined,
+  };
+}
+
+function doSearch() {
+  const s = collectSearch();
+  if (s === undefined) return;
+  currentSearch = s;
+  currentPage = 1;
+  invoke('set_current_page', { seachType: currentSeachType, pageIndex: 1 });
+  loadTickets();
+}
+
+function clearSearch() {
+  ['s-kw', 's-status', 's-date-begin', 's-date-end', 's-cg'].forEach(id => { $(id).value = ''; });
+  currentSearch = null;
+  currentPage = 1;
+  invoke('set_current_page', { seachType: currentSeachType, pageIndex: 1 });
+  loadTickets();
+}
+
+function initSearchUI() {
+  const sel = $('s-status');
+  STATUS_OPTIONS.forEach(o => {
+    const op = document.createElement('option');
+    op.value = o.value;
+    op.textContent = o.label;
+    sel.appendChild(op);
+  });
+  attachAutocomplete('s-cg', 's-cg-list',
+    q => invoke('search_customer_groups', { keyword: q }),
+    it => esc(it.customerGroupName),
+    it => { $('s-cg').value = it.customerGroupName; });
+  $('search-btn').addEventListener('click', doSearch);
+  $('search-clear').addEventListener('click', clearSearch);
+  $('s-kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  $('s-cg').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  $('s-status').addEventListener('change', doSearch);
 }
 
 function totalPages() {
@@ -468,7 +608,7 @@ function renderDetail(d, replies) {
   if (replies.length === 0) html += '<div class="detail-empty">暂无回复</div>';
   replies.forEach(r => {
     html += `<div class="reply-item ${r.isPrivate ? 'internal' : ''}">
-      <div class="reply-meta">${esc(r.createdByName || r.createdBy || '系统')} · ${fmt(r.creationDate)}${r.isPrivate ? ' · 内部' : ''}</div>
+      <div class="reply-meta">${esc(r.userName || r.createdByName || r.createdBy || '系统')} · ${fmt(r.replyTime || r.creationDate)}${r.isPrivate ? ' · 内部' : ''}</div>
       <div class="reply-content">${sanitizeHtml(r.detail)}</div></div>`;
   });
   pane.innerHTML = html;
@@ -500,7 +640,7 @@ function openRichDialog(kind, dlgId, codeSpanId, code) {
   $(codeSpanId).textContent = code;
   const ed = ensureEditor(kind);
   if (ed) ed.reset();
-  $(dlgId).showModal();
+  openDlg($(dlgId));
 }
 
 document.querySelectorAll('dialog [data-close]').forEach(b => {
@@ -526,7 +666,7 @@ $('reply-submit').addEventListener('click', async () => {
   const html = ed.getHtml();
   if (!html) return toast('请输入回复内容');
   try {
-    const r = await invoke('reply', { orderId: t.incidentId, detail: html, fileIds: ed.getFileIds(), isPrivate: $('reply-private').checked, orderType: t.orderType || '1' });
+    const r = await invoke('reply', { orderId: t.incidentId, detail: html, fileIds: [], isPrivate: $('reply-private').checked, orderType: t.orderType || '1' });
     if (r.code === 800) {
       toast('回复成功', 'success');
       $('reply-dialog').close();
@@ -666,7 +806,7 @@ async function openBudan() {
     }
   } catch (e) { /* 忽略，用户可手输 */ }
 
-  $('budan-dialog').showModal();
+  openDlg($('budan-dialog'));
 }
 
 // 服务目录 cascader：L1 → L2（serviceType）→ L3（children）
@@ -754,7 +894,7 @@ $('budan-submit').addEventListener('click', async () => {
     serviceSubType: budanSel.serviceSubType,
     orderSubject: subject,
     detail: detailHtml,
-    fileIds: budanEd.getFileIds(),
+    fileIds: [],
     priority: '3',
     contactCustomerGroup: budanSel.customerGroupId,
     requestor: budanSel.requestorId,
@@ -895,6 +1035,8 @@ async function doClose(t) {
 
 listen('tickets-updated', (ev) => {
   const p = ev.payload || {};
+  // 搜索态忽略后台默认列表刷新（scheduler 不带 search 条件，避免覆盖搜索结果）
+  if (currentSearch) return;
   // 刷新的是当前视图 + 当前页 + 当前 pageSize 才替换列表
   if (p.seachType === currentSeachType && p.page_index === currentPage && p.page_size === pageSize) {
     currentTickets = p.data || [];
@@ -936,6 +1078,8 @@ async function openSettings() {
     wrap.appendChild(label);
   });
   $('settings-interval').value = cfg.interval_sec;
+  $('settings-autostart').checked = !!cfg.autostart_enabled;
+  $('settings-min-tray').checked = !!cfg.minimize_to_tray;
 
   // 默认值回填
   settingsDefaults = {
@@ -983,6 +1127,8 @@ $('settings-submit').addEventListener('click', async () => {
   if (whitelist.length === 0) return toast('至少选一个视图');
   try {
     const cur = await invoke('get_config', { seachType: currentSeachType });
+    const min_tray_new = $('settings-min-tray').checked;
+    const autostart_new = $('settings-autostart').checked;
     await invoke('save_config', {
       config: {
         ...cur,
@@ -993,8 +1139,12 @@ $('settings-submit').addEventListener('click', async () => {
         default_requestor_name: settingsDefaults.rqName || null,
         default_support_group_id: settingsDefaults.sgId || null,
         default_support_group_name: settingsDefaults.sgName || null,
+        minimize_to_tray: min_tray_new,
       }
     });
+    if (autostart_new !== cur.autostart_enabled) {
+      await invoke('set_autostart', { enabled: autostart_new });
+    }
     $('settings-dialog').close();
     toast('已保存', 'success');
   } catch (e) {
@@ -1003,5 +1153,7 @@ $('settings-submit').addEventListener('click', async () => {
 });
 
 initResizer();
+enableResizableDialogs();
 applyDetailWidth();
+initSearchUI();
 init();

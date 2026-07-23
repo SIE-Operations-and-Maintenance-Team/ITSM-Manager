@@ -37,7 +37,22 @@ pub struct Config {
     /// 详情面板宽度百分比（20–70）；None = 默认 35%（由前端 CSS 变量回退）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail_width_pct: Option<f64>,
+    /// 开机自启。默认关 —— 用户主动开。
+    #[serde(default)]
+    pub autostart_enabled: bool,
+    /// 关闭按钮(×)进托盘而非退出。默认开（老 config 缺字段补 true）。
+    #[serde(default = "default_true")]
+    pub minimize_to_tray: bool,
+    /// 首次关闭进托盘气泡已弹过。弹后置 true，不再弹。
+    #[serde(default)]
+    pub tray_hint_shown: bool,
+    /// 暂停前的有效刷新间隔，用于托盘"恢复"。总是 > 0。
+    #[serde(default = "default_last_interval")]
+    pub last_interval_sec: u64,
 }
+
+fn default_true() -> bool { true }
+fn default_last_interval() -> u64 { DEFAULT_INTERVAL }
 
 impl Config {
     pub fn default_with(seach_type: i64) -> Self {
@@ -52,6 +67,10 @@ impl Config {
             default_support_group_name: None,
             view_page_sizes: HashMap::new(),
             detail_width_pct: None,
+            autostart_enabled: false,
+            minimize_to_tray: true,
+            tray_hint_shown: false,
+            last_interval_sec: DEFAULT_INTERVAL,
         }
     }
 
@@ -82,8 +101,20 @@ impl Config {
         Self {
             interval_sec: Self::clamp_interval(self.interval_sec),
             detail_width_pct: Self::clamp_detail_width(self.detail_width_pct),
+            last_interval_sec: Self::clamp_interval(self.last_interval_sec).max(MIN_INTERVAL),
             ..self
         }.dedup()
+    }
+
+    /// 托盘"暂停/恢复"切换的取值决策（纯函数）
+    pub fn toggled_pause(mut self) -> Self {
+        if self.interval_sec > 0 {
+            self.last_interval_sec = self.interval_sec;
+            self.interval_sec = 0;
+        } else {
+            self.interval_sec = self.last_interval_sec.max(MIN_INTERVAL);
+        }
+        self
     }
 }
 
@@ -141,20 +172,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300 }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300 }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300 };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -201,7 +232,75 @@ mod tests {
             default_support_group_id: None, default_support_group_name: None,
             view_page_sizes: HashMap::new(),
             detail_width_pct: Some(10.0),
+            autostart_enabled: false, minimize_to_tray: true,
+            tray_hint_shown: false, last_interval_sec: 300,
         }.normalize();
         assert_eq!(c.detail_width_pct, Some(20.0));
+    }
+
+    #[test]
+    fn legacy_config_new_bool_fields_defaults() {
+        // 老 config 无 4 个新字段，反序列化应填充默认
+        let legacy = r#"{"whitelist":[2],"interval_sec":300}"#;
+        let c: Config = serde_json::from_str(legacy).unwrap();
+        assert_eq!(c.autostart_enabled, false);
+        assert_eq!(c.minimize_to_tray, true, "minimize_to_tray 老配置默认开");
+        assert_eq!(c.tray_hint_shown, false);
+        assert_eq!(c.last_interval_sec, 300);
+    }
+
+    #[test]
+    fn last_interval_clamped_no_zero() {
+        // normalize 强制 last_interval_sec >= 30，不允许 0
+        let base = || Config {
+            whitelist: vec![1], interval_sec: 300,
+            default_customer_group_id: None, default_customer_group_name: None,
+            default_requestor_id: None, default_requestor_name: None,
+            default_support_group_id: None, default_support_group_name: None,
+            view_page_sizes: HashMap::new(), detail_width_pct: None,
+            autostart_enabled: false, minimize_to_tray: true,
+            tray_hint_shown: false, last_interval_sec: 0,
+        };
+        assert_eq!(base().normalize().last_interval_sec, 30, "0 -> 最小 30");
+        let mut c = base(); c.last_interval_sec = 5;
+        assert_eq!(c.normalize().last_interval_sec, 30, "低于最小 -> 30");
+        let mut c = base(); c.last_interval_sec = 99999;
+        assert_eq!(c.normalize().last_interval_sec, 1800, "超过最大 -> 1800");
+    }
+
+    #[test]
+    fn normalize_keeps_last_when_interval_zero() {
+        let mut c = Config {
+            whitelist: vec![1], interval_sec: 0,
+            default_customer_group_id: None, default_customer_group_name: None,
+            default_requestor_id: None, default_requestor_name: None,
+            default_support_group_id: None, default_support_group_name: None,
+            view_page_sizes: HashMap::new(), detail_width_pct: None,
+            autostart_enabled: false, minimize_to_tray: true,
+            tray_hint_shown: false, last_interval_sec: 120,
+        };
+        c = c.normalize();
+        assert_eq!(c.interval_sec, 0, "interval 0 = 暂停，保留");
+        assert_eq!(c.last_interval_sec, 120, "last 保留原值");
+    }
+
+    #[test]
+    fn toggled_pause_to_zero_and_back() {
+        let mut c = Config {
+            whitelist: vec![1], interval_sec: 300,
+            default_customer_group_id: None, default_customer_group_name: None,
+            default_requestor_id: None, default_requestor_name: None,
+            default_support_group_id: None, default_support_group_name: None,
+            view_page_sizes: HashMap::new(), detail_width_pct: None,
+            autostart_enabled: false, minimize_to_tray: true,
+            tray_hint_shown: false, last_interval_sec: 300,
+        };
+        // 暂停：记 last=300，interval->0
+        c = c.toggled_pause();
+        assert_eq!(c.interval_sec, 0);
+        assert_eq!(c.last_interval_sec, 300);
+        // 恢复：interval<-last
+        c = c.toggled_pause();
+        assert_eq!(c.interval_sec, 300);
     }
 }
