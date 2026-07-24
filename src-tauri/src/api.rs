@@ -456,6 +456,22 @@ pub async fn reassign(
     .await
 }
 
+/// 暂挂/取消挂起：multipart form { id, optionType ("suspend"|"unhang"), detail }
+/// 后端据 detail 自动写系统回复「XXX挂起工单，挂起原因：{detail}」
+pub async fn suspend_or_unhang(
+    client: &reqwest::Client,
+    token: &str,
+    id: &str,
+    option_type: &str,
+    detail: &str,
+) -> Result<Value, String> {
+    let form = reqwest::multipart::Form::new()
+        .text("id", id.to_string())
+        .text("optionType", option_type.to_string())
+        .text("detail", detail.to_string());
+    do_post_multipart(client, token, "/api/itsm/incidentService/suspend-or-unhang", form).await
+}
+
 /// 取消工单：无 params 包裹，body 直接是 {incidentId, operationReason}
 pub async fn cancel_incident(
     client: &reqwest::Client,

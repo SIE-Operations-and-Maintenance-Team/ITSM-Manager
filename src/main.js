@@ -268,6 +268,15 @@ async function applyDetailWidth() {
   } catch (e) { /* 默认 35% */ }
 }
 
+// 启动时把顶部刷新间隔下拉同步到 config.interval_sec（HTML 默认 selected=30s，不回显会与配置脱节）
+async function applyRefreshInterval() {
+  try {
+    const cfg = await invoke('get_config', { seachType: currentSeachType });
+    const sec = cfg.interval_sec;
+    $('refresh-interval').value = [0, 30, 60, 120, 300].includes(sec) ? String(sec) : '30';
+  } catch (e) { /* 默认 30 */ }
+}
+
 function ageText(unixSec) {
   if (!unixSec) return '未知';
   const mins = Math.floor((Date.now() / 1000 - unixSec) / 60);
@@ -310,6 +319,7 @@ function showMain(creds) {
   $('login-screen').hidden = true;
   $('main-screen').hidden = false;
   $('user-name').textContent = creds.user_name || '已登录';
+  applyRefreshInterval();
   loadViews();
 }
 
@@ -642,7 +652,12 @@ function actionBtns(t) {
   html += `<button class="btn" data-act="reply" data-id="${t.incidentId}">回复</button>`;
   if (s === 'Processing' || s === 'Suspend' || s === 'Wait') {
     html += `<button class="btn" data-act="resolve" data-id="${t.incidentId}">解决</button>`;
-    html += `<button class="btn" data-act="suspend" data-id="${t.incidentId}">暂挂</button>`;
+    // Suspend 状态显示「解挂」，其余显示「暂挂」
+    if (s === 'Suspend') {
+      html += `<button class="btn" data-act="unhang" data-id="${t.incidentId}">解挂</button>`;
+    } else {
+      html += `<button class="btn" data-act="suspend" data-id="${t.incidentId}">暂挂</button>`;
+    }
   }
   // 转派：待受理/处理中/暂挂/等待中
   if (s === 'Assigning' || s === 'Processing' || s === 'Suspend' || s === 'Wait') {
@@ -713,6 +728,7 @@ function handleAction(act, t) {
   if (act === 'reply') return openRichDialog('reply', 'reply-dialog', 'reply-code', t.incidentCode);
   if (act === 'resolve') return openRichDialog('resolve', 'resolve-dialog', 'resolve-code', t.incidentCode);
   if (act === 'suspend') return openDialog('suspend-dialog', 'suspend-code', 'suspend-text', t.incidentCode);
+  if (act === 'unhang') return doUnhang(t);
   if (act === 'reassign') return openReassign(t);
   if (act === 'cancel') return openCancel(t);
   if (act === 'close') return doClose(t);
@@ -932,6 +948,13 @@ async function openBudan() {
   }
   fillSelect($('budan-l1'), serviceTree, 'code', 'name', '一级（服务大类）');
 
+  // 一级默认选「软件服务」（按 name 匹配，命中后触发 change 联动加载二级）
+  const defaultL1 = serviceTree.find(n => n.name === '软件服务');
+  if (defaultL1) {
+    $('budan-l1').value = defaultL1.code;
+    $('budan-l1').dispatchEvent(new Event('change'));
+  }
+
   // 填默认客户组/提单人（来自配置）
   try {
     const cfg = await invoke('get_config', { seachType: currentSeachType });
@@ -1053,7 +1076,15 @@ $('budan-submit').addEventListener('click', async () => {
   try {
     const r = await invoke('save_replenish', { params });
     if (r.code === 800) {
-      toast('补单成功：' + (r.data || ''), 'success');
+      // r.data 是新单 incidentId；二次取 incidentCode 显示单号，失败回退 id
+      let label = r.data || '';
+      if (label) {
+        try {
+          const d = await invoke('get_detail', { id: label });
+          if (d?.data?.incidentCode) label = d.data.incidentCode;
+        } catch (e) { /* 取单号失败，回退显示 id */ }
+      }
+      toast('补单成功：' + label, 'success');
       $('budan-dialog').close();
       await invoke('invalidate_after_write', { seachType: currentSeachType });
     } else toast('补单失败: ' + (r.msg || ''), 'error');
@@ -1069,6 +1100,7 @@ async function openReassign(t) {
   $('reassign-person').innerHTML = '<option value="">请先选支持组</option>';
   $('reassign-person').disabled = true;
   $('reassign-group').value = '';
+  $('reassign-allot').value = '';
 
   // 懒加载下拉数据
   if (allSupportGroups.length === 0) {
@@ -1101,6 +1133,13 @@ $('reassign-group').addEventListener('change', () => {
   const members = sgId ? allSupportMembers.filter(m => m.sgId === sgId) : [];
   fillSelect($('reassign-person'), members, 'userId', 'userName', '请选择支持人');
   $('reassign-person').disabled = members.length === 0;
+});
+
+// 选分派类型时自动带出 dicName 到「分派原因」（对齐原系统：原因内容赋值到回复内容）
+$('reassign-allot').addEventListener('change', () => {
+  const code = $('reassign-allot').value;
+  const item = allotTypes.find(a => a.dicCode === code);
+  if (item) $('reassign-reason').value = item.dicName || '';
 });
 
 $('reassign-submit').addEventListener('click', async () => {
@@ -1170,6 +1209,18 @@ async function doClose(t) {
       await invoke('invalidate_after_write', { seachType: currentSeachType });
     } else toast('关闭失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('关闭失败: ' + e, 'error'); }
+}
+
+async function doUnhang(t) {
+  if (!confirm(`确认解挂 ${t.incidentCode}？`)) return;
+  try {
+    const r = await invoke('unhang', { id: t.incidentId });
+    if (r.code === 800) {
+      toast('已解挂', 'success');
+      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      loadDetail(t);
+    } else toast('解挂失败: ' + (r.msg || ''), 'error');
+  } catch (e) { toast('解挂失败: ' + e, 'error'); }
 }
 
 // ============ 全局事件 listener（仅注册一次） ============
@@ -1262,7 +1313,8 @@ async function openSettings() {
     label.innerHTML = `<input type="checkbox" data-st="${v.seachType}" ${cfg.whitelist.includes(v.seachType) ? 'checked' : ''}> ${esc(v.viewName)}`;
     wrap.appendChild(label);
   });
-  $('settings-interval').value = cfg.interval_sec;
+  const intVal = cfg.interval_sec;
+  $('settings-interval').value = [30, 60, 120, 300].includes(intVal) ? intVal : 300;
   $('settings-autostart').checked = !!cfg.autostart_enabled;
   $('settings-min-tray').checked = !!cfg.minimize_to_tray;
   $('settings-auto-claim').checked = !!cfg.auto_claim_enabled;
@@ -1318,7 +1370,7 @@ $('settings-btn').addEventListener('click', openSettings);
 $('settings-submit').addEventListener('click', async () => {
   const whitelist = Array.from(document.querySelectorAll('#settings-whitelist input:checked'))
     .map(cb => parseInt(cb.dataset.st));
-  const interval_sec = Math.max(30, Math.min(1800, parseInt($('settings-interval').value) || 300));
+  const interval_sec = parseInt($('settings-interval').value) || 300;
   if (whitelist.length === 0) return toast('至少选一个视图');
   try {
     const cur = await invoke('get_config', { seachType: currentSeachType });

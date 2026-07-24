@@ -271,6 +271,7 @@ pub fn run() {
             commands::reply,
             commands::resolve,
             commands::suspend,
+            commands::unhang,
             commands::list_service_tree,
             commands::get_replenish_template,
             commands::get_dict,

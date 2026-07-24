@@ -186,7 +186,13 @@ pub async fn resolve(id: String, solution: String, state: State<'_, AppState>) -
 #[tauri::command]
 pub async fn suspend(id: String, reason: String, state: State<'_, AppState>) -> Result<Value, String> {
     let token = state::get_token(&state)?;
-    api::change_status(&state.client, &token, &id, "Suspend", &reason, false).await
+    api::suspend_or_unhang(&state.client, &token, &id, "suspend", &reason).await
+}
+
+#[tauri::command]
+pub async fn unhang(id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    let token = state::get_token(&state)?;
+    api::suspend_or_unhang(&state.client, &token, &id, "unhang", "").await
 }
 
 // ============ 补单 / 转派 / 取消 / 关闭 ============

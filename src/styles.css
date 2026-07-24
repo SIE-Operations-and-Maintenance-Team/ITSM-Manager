@@ -113,9 +113,9 @@ dialog h3 { margin: 0 0 12px; font-size: 15px; }
 /* display 限定 [open]：避免覆盖 UA 的 dialog:not([open]){display:none} 导致关闭后仍可见；
    margin:0 覆盖 UA margin:auto 居中机制，否则设 left/top 后仍被 margin 重算偏移（拖动不准） */
 .dialog-resizable { resize: both; overflow: hidden; margin: 0; min-width: 360px; min-height: 240px; max-width: 95vw; max-height: 90vh; }
-.dialog-resizable[open] { display: flex; flex-direction: column; }
+.dialog-resizable[open] { display: flex; flex-direction: column; overflow-y: auto; }
 .dialog-resizable h3 { cursor: move; user-select: none; margin: -20px -20px 12px; padding: 20px 20px 0; }
-.dialog-resizable > .dialog-actions, .dialog-resizable > .row, .dialog-resizable > label.field { flex: none; }
+.dialog-resizable > .dialog-actions, .dialog-resizable > .row, .dialog-resizable > .field { flex: none; }
 #reply-dialog, #resolve-dialog { width: 720px; }
 dialog textarea { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 13px; resize: vertical; }
 dialog .row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font-size: 12px; }
@@ -130,11 +130,11 @@ dialog .row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font
 
 /* 补单 / 转派 通用字段 */
 .dialog-wide { width: 820px; }
-dialog label.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
-dialog label.field > span { font-weight: 600; }
-dialog label.field.full { grid-column: 1 / -1; }
-dialog label.field input, dialog label.field select, dialog label.field textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 13px; color: var(--text); background: #fff; }
-dialog label.field input:focus, dialog label.field select:focus, dialog label.field textarea:focus { outline: none; border-color: var(--primary); }
+dialog .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+dialog .field > span { font-weight: 600; }
+dialog .field.full { grid-column: 1 / -1; }
+dialog .field input, dialog .field select, dialog .field textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 13px; color: var(--text); background: #fff; }
+dialog .field input:focus, dialog .field select:focus, dialog .field textarea:focus { outline: none; border-color: var(--primary); }
 .field-grid { display: grid; gap: 6px 14px; }
 .field-grid.cols-2 { grid-template-columns: 1fr 1fr; }
 .field-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
@@ -153,6 +153,6 @@ dialog label.field input:focus, dialog label.field select:focus, dialog label.fi
 /* 富文本编辑器 */
 .rich-toolbar { border: 1px solid var(--border); border-bottom: none; border-radius: 4px 4px 0 0; }
 .rich-editor { border: 1px solid var(--border); border-radius: 0 0 4px 4px; }
-.rich-editor .w-e-text-container { min-height: 220px; }
+.rich-editor .w-e-text-container { min-height: 220px; max-height: 50vh; overflow-y: auto; }
 .rich-editor .w-e-text-placeholder { color: var(--muted); }
 dialog .rich-editor { margin-top: 4px; }
