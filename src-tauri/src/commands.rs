@@ -56,6 +56,33 @@ pub fn clear_creds(app: AppHandle, state: State<AppState>) -> Result<(), String>
     Ok(())
 }
 
+/// 保存账密（"记住密码"勾选时，明文存 app_data_dir/stored-cred.json，后续应加密）
+#[tauri::command]
+pub fn save_stored_cred(cred: state::StoredCred, app: AppHandle) -> Result<(), String> {
+    if let Some(p) = state::stored_cred_path(&app) {
+        let s = serde_json::to_string_pretty(&cred).map_err(|e| e.to_string())?;
+        state::atomic_write(&p, &s)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn load_stored_cred(app: AppHandle) -> Option<state::StoredCred> {
+    state::stored_cred_path(&app).and_then(|p| {
+        std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|s| serde_json::from_str::<state::StoredCred>(&s).ok())
+    })
+}
+
+#[tauri::command]
+pub fn clear_stored_cred(app: AppHandle) -> Result<(), String> {
+    if let Some(p) = state::stored_cred_path(&app) {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn list_views(state: State<'_, AppState>) -> Result<Value, String> {
     let token = state::get_token(&state)?;

@@ -8,6 +8,12 @@ let currentTickets = [];    // 当前页数据（后端已分页）
 let totalCount = 0;         // 当前视图全量总数（后端 count）
 let selectedId = null;
 let currentAction = null;
+let claimingLock = false;     // 批量/自动接单进行中标志，防并发
+const PENDING_CLAIM_VIEW = '待我接单';   // 目标视图 viewName，精确匹配
+let autoClaimEnabled = false;             // 内存缓存，config-changed 时刷新
+let autoClaimSeachType = null;            // 内存缓存，null 表示未配置
+let lastClaimIds = [];                    // 上一轮自动接单的 incidentId 列表，死循环防护
+let lastClaimTime = 0;                    // 上一轮自动接单时间戳（ms）
 let allViews = [];
 let pageSize = 50;          // 当前视图页大小：50/100/200，切视图时从 config 读
 let currentPage = 1;        // 当前页码，从 1 开始
@@ -31,6 +37,14 @@ const STATUS_NAME = {
 const STATUS_OPTIONS = Object.entries(STATUS_NAME).map(([k, v]) => ({ value: k, label: v }));
 
 const $ = (id) => document.getElementById(id);
+// 登录失效统一判定：token 缺失（"未登录"）或 token 失效（"登录已失效"，ITSM 返 PERMISSION_NOT_PASS）
+const isAuthExpired = (e) => /未登录|登录已失效/.test(String(e));
+// login-tip 提示：isError=true 时醒目（大字红）
+function setTip(msg, isError = false) {
+  const t = $('login-tip');
+  t.textContent = msg;
+  t.classList.toggle('error', isError);
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = (s) => s ? String(s).replace('T', ' ').slice(0, 16) : '-';
 const stripHtml = (h) => String(h || '').replace(/<[^>]+>/g, '').trim();
@@ -273,11 +287,18 @@ function toast(msg, type = '') {
 async function init() {
   try {
     const creds = await invoke('get_creds');
-    if (creds && creds.token) showMain(creds);
-    else showLogin();
-  } catch (e) {
-    showLogin();
-  }
+    if (creds && creds.token) { showMain(creds); return; }
+  } catch (e) {}
+  showLogin();
+  // 加载已存账密（"记住密码"）
+  try {
+    const stored = await invoke('load_stored_cred');
+    if (stored) {
+      $('login-account').value = stored.account || '';
+      $('login-password').value = stored.password || '';
+      $('login-remember').checked = true;
+    }
+  } catch (e) {}
 }
 
 function showLogin() {
@@ -292,25 +313,58 @@ function showMain(creds) {
   loadViews();
 }
 
-// 登录
-$('login-btn').addEventListener('click', async () => {
-  $('login-tip').textContent = '正在打开登录窗口，请在弹出窗口中登录 ITSM...';
+// 登录（自建：账密 → login_auto 注入外部窗口自动填充）
+async function doLogin() {
+  const account = $('login-account').value.trim();
+  const password = $('login-password').value;
+  if (!account || !password) { setTip('请输入账号和密码', true); return; }
+  setTip('正在自动登录...');
+  $('login-btn').disabled = true;
+  try {
+    await invoke('login_auto', { account, password });
+    // login-success listener（顶层）接管 showMain
+  } catch (e) {
+    setTip('登录启动失败: ' + e, true);
+    $('login-btn').disabled = false;
+  }
+}
+$('login-btn').addEventListener('click', doLogin);
+$('login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+// 外部窗口登录（降级：验证码 / SSO / 异常账号）
+$('login-external-btn').addEventListener('click', async () => {
+  setTip('正在打开登录窗口，请在弹出窗口中登录 ITSM...');
   try {
     await invoke('open_login');
-    await listen('login-success', async (ev) => {
-      const c = ev.payload;
-      if (!c || !c.token) return;
-      await invoke('save_creds', { creds: c });
-      $('login-tip').textContent = '登录成功，正在加载...';
-      showMain(c);
-      toast('登录成功', 'success');
-    });
-    await listen('login-timeout', () => {
-      $('login-tip').textContent = '登录超时，请重试';
-    });
   } catch (e) {
-    $('login-tip').textContent = '打开登录窗口失败: ' + e;
+    setTip('打开登录窗口失败: ' + e, true);
   }
+});
+
+// open_login beacon 回传成功（顶层注册一次，避免重复 listen）
+listen('login-success', (ev) => {
+  const c = ev.payload;
+  if (!c || !c.token) return;
+  // 记住密码：勾选则保存，未勾选则清除已存
+  const remember = $('login-remember').checked;
+  const acct = $('login-account').value.trim();
+  const pwd = $('login-password').value;
+  if (remember && acct && pwd) {
+    invoke('save_stored_cred', { cred: { account: acct, password: pwd } }).catch(() => {});
+  } else {
+    invoke('clear_stored_cred').catch(() => {});
+  }
+  setTip('登录成功，正在加载...');
+  showMain(c);
+  toast('登录成功', 'success');
+});
+listen('login-timeout', () => { setTip('登录超时，请重试', true); });
+listen('login-failed', (ev) => {
+  setTip(ev.payload || '登录失败', true);
+  $('login-btn').disabled = false;
+});
+listen('login-captcha', () => {
+  setTip('需要验证码，请在弹出的 ITSM 窗口手动输入验证码后点登录', true);
 });
 
 $('logout-btn').addEventListener('click', async () => {
@@ -337,6 +391,36 @@ $('refresh-interval').addEventListener('change', async (e) => {
   }
 });
 
+// 从后端刷新自动接单内存变量（init / config-changed 调）
+async function refreshAutoClaimConfig() {
+  try {
+    const cfg = await invoke('get_config', { seachType: currentSeachType });
+    autoClaimEnabled = !!cfg.auto_claim_enabled;
+    autoClaimSeachType = cfg.auto_claim_seach_type ?? null;
+  } catch (e) { /* 静默 */ }
+}
+
+// 首次启动补默认：把"待我接单"加进白名单 + 填 auto_claim_seach_type。
+// 仅在"未自定义"时改：白名单长度<=1 且不含该视图。
+async function ensureFirstRunDefaults() {
+  const pendingView = allViews.find(v => v.viewName === PENDING_CLAIM_VIEW);
+  if (!pendingView) return;   // 后端无此视图，静默
+  const pendingSt = pendingView.seachType;
+  try {
+    const cfg = await invoke('get_config', { seachType: currentSeachType });
+    let changed = false;
+    if (cfg.whitelist.length <= 1 && !cfg.whitelist.includes(pendingSt)) {
+      cfg.whitelist = Array.from(new Set([...cfg.whitelist, pendingSt]));
+      changed = true;
+    }
+    if (cfg.auto_claim_seach_type == null) {
+      cfg.auto_claim_seach_type = pendingSt;
+      changed = true;
+    }
+    if (changed) await invoke('save_config', { config: cfg });
+  } catch (e) { /* 静默，不阻塞视图加载 */ }
+}
+
 // 视图列表
 async function loadViews() {
   try {
@@ -358,9 +442,11 @@ async function loadViews() {
       el.addEventListener('click', () => switchView(v, el));
       wrap.appendChild(el);
     });
+    await ensureFirstRunDefaults();
+    await refreshAutoClaimConfig();
     loadTickets();
   } catch (e) {
-    if (String(e).includes('未登录')) showLogin();
+    if (isAuthExpired(e)) showLogin();
     else toast('加载视图失败: ' + e, 'error');
   }
 }
@@ -399,7 +485,7 @@ async function loadTickets(silent = false) {
       invoke('trigger_refresh', { seachType: currentSeachType });
     }
   } catch (e) {
-    if (String(e).includes('未登录')) { showLogin(); return; }
+    if (isAuthExpired(e)) { showLogin(); return; }
     toast('加载失败: ' + e, 'error');
     $('list-status').textContent = '加载失败: ' + e;
   }
@@ -474,6 +560,7 @@ function renderTable() {
   if (currentTickets.length === 0) {
     tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#8a9099;padding:40px">暂无工单</td></tr>';
     renderPagination();
+    updateClaimAllBtn();
     return;
   }
   currentTickets.forEach(t => {
@@ -506,6 +593,7 @@ function renderTable() {
     });
   });
   renderPagination();
+  updateClaimAllBtn();
 }
 
 // 分页控件：总数超过 50 才显示；上一页/下一页 + 每页条数切换（持久化 per-view）
@@ -647,17 +735,70 @@ document.querySelectorAll('dialog [data-close]').forEach(b => {
   b.addEventListener('click', () => b.closest('dialog').close());
 });
 
+// 单条接单 API 调用。成功返 {ok:true}；业务/网络失败返 {ok:false,msg}；
+// token 失效（命中 isAuthExpired）向上抛，供批量接单中断。
+async function claimOne(id) {
+  try {
+    const r = await invoke('claim', { id });
+    if (r.code === 800) return { ok: true };
+    return { ok: false, msg: r.msg || '' };
+  } catch (e) {
+    if (isAuthExpired(e)) throw e;
+    return { ok: false, msg: String(e) };
+  }
+}
+
+// 更新一键接单按钮显隐 + 计数。
+// 目标视图（按 seachType 识别，与自动接单同源）+ 未启用自动接单 + 有数据 才显示
+function updateClaimAllBtn() {
+  const btn = $('claim-all-btn');
+  // 目标视图（按 seachType 识别，与自动接单同源）+ 未启用自动接单 即显示；无单时数字留空
+  const isTargetView = autoClaimSeachType != null && currentSeachType === autoClaimSeachType;
+  const show = isTargetView && !autoClaimEnabled;
+  btn.hidden = !show;
+  if (show) $('claim-all-count').textContent = currentTickets.length > 0 ? currentTickets.length : '';
+}
+
+// 一键接单当前页：顺序循环 claimOne，汇总成功/失败，末尾刷新
+async function doClaimAll() {
+  if (claimingLock) return toast('正在接单中...');
+  if (currentTickets.length === 0) return toast('当前无工单可接单');
+  if (!confirm(`确认接单当前页 ${currentTickets.length} 条？`)) return;
+  claimingLock = true;
+  let ok = 0, fail = 0;
+  const failedIds = [];
+  try {
+    for (const t of currentTickets) {
+      const res = await claimOne(t.incidentId);
+      if (res.ok) ok++; else { fail++; failedIds.push(t.incidentCode || t.incidentId); }
+    }
+    toast(`接单完成：成功 ${ok} 条${fail ? '，失败 ' + fail + ' 条' : ''}`, fail ? 'error' : 'success');
+    if (fail) console.warn('接单失败单号', failedIds);
+  } catch (e) {
+    if (isAuthExpired(e)) { showLogin(); toast(`接单中断（token 失效）：已接 ${ok} 条`, 'error'); }
+    else toast('接单异常: ' + e, 'error');
+  } finally {
+    claimingLock = false;
+    await invoke('invalidate_after_write', { seachType: currentSeachType });
+  }
+}
+
 async function doClaim(t) {
   if (!confirm(`接单 ${t.incidentCode}？`)) return;
   try {
-    const r = await invoke('claim', { id: t.incidentId });
-    if (r.code === 800) {
+    const res = await claimOne(t.incidentId);
+    if (res.ok) {
       toast('接单成功', 'success');
       await invoke('invalidate_after_write', { seachType: currentSeachType });
       loadDetail({ ...t, status: 'Processing' });
-    } else toast('接单失败: ' + (r.msg || ''), 'error');
-  } catch (e) { toast('接单失败: ' + e, 'error'); }
+    } else toast('接单失败: ' + res.msg, 'error');
+  } catch (e) {
+    if (isAuthExpired(e)) { showLogin(); return; }
+    toast('接单失败: ' + e, 'error');
+  }
 }
+
+$('claim-all-btn').addEventListener('click', doClaimAll);
 
 $('reply-submit').addEventListener('click', async () => {
   const { t } = currentAction;
@@ -1033,6 +1174,46 @@ async function doClose(t) {
 
 // ============ 全局事件 listener（仅注册一次） ============
 
+// 自动接单触发判定：开关开 + 视图匹配 + 未在接单 + data 非空
+async function maybeRunAutoClaim(p) {
+  if (!autoClaimEnabled) return;
+  if (p.seachType !== autoClaimSeachType) return;
+  if (claimingLock) return;
+  const data = Array.isArray(p.data) ? p.data : [];
+  if (data.length === 0) return;
+  await runAutoClaim(data);
+}
+
+// 自动批量接单。顺序循环 claimOne + 60s 死循环防护（同批 id 短时间内不重接）
+async function runAutoClaim(data) {
+  const ids = data.map(t => t.incidentId);
+  const now = Date.now();
+  const sameAsLast = ids.length === lastClaimIds.length && ids.every(id => lastClaimIds.includes(id));
+  if (sameAsLast && now - lastClaimTime < 60_000) {
+    toast('自动接单连续无变化，暂停一轮', 'error');
+    return;
+  }
+  claimingLock = true;
+  lastClaimIds = ids;
+  lastClaimTime = now;
+  let ok = 0, fail = 0;
+  const failedIds = [];
+  try {
+    for (const t of data) {
+      const res = await claimOne(t.incidentId);
+      if (res.ok) ok++; else { fail++; failedIds.push(t.incidentCode || t.incidentId); }
+    }
+    if (ok > 0) toast(`自动接单成功 ${ok} 条`, 'success');
+    if (fail > 0) { toast(`自动接单失败 ${fail} 条`, 'error'); console.warn('自动接单失败单号', failedIds); }
+  } catch (e) {
+    if (isAuthExpired(e)) { showLogin(); toast(`自动接单中断（token 失效）：已接 ${ok} 条`, 'error'); }
+    else toast('自动接单异常: ' + e, 'error');
+  } finally {
+    claimingLock = false;
+    await invoke('invalidate_after_write', { seachType: autoClaimSeachType });
+  }
+}
+
 listen('tickets-updated', (ev) => {
   const p = ev.payload || {};
   // 搜索态忽略后台默认列表刷新（scheduler 不带 search 条件，避免覆盖搜索结果）
@@ -1055,11 +1236,15 @@ listen('tickets-updated', (ev) => {
       if (span) span.textContent = p.count ?? '';
     }
   });
+  // 自动接单（异步触发，不阻塞列表刷新）
+  maybeRunAutoClaim(p);
 });
 
 listen('need-login', () => showLogin());
 
 listen('refresh-failed', () => toast('刷新连续失败，可能服务异常', 'error'));
+
+listen('config-changed', async () => { await refreshAutoClaimConfig(); updateClaimAllBtn(); });
 
 // ============ 设置 UI ============
 
@@ -1080,6 +1265,16 @@ async function openSettings() {
   $('settings-interval').value = cfg.interval_sec;
   $('settings-autostart').checked = !!cfg.autostart_enabled;
   $('settings-min-tray').checked = !!cfg.minimize_to_tray;
+  $('settings-auto-claim').checked = !!cfg.auto_claim_enabled;
+  const acViewSel = $('settings-auto-claim-view');
+  acViewSel.innerHTML = '<option value="">请选择</option>';
+  allViews.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v.seachType;
+    o.textContent = v.viewName;
+    acViewSel.appendChild(o);
+  });
+  acViewSel.value = cfg.auto_claim_seach_type ?? '';
 
   // 默认值回填
   settingsDefaults = {
@@ -1140,6 +1335,8 @@ $('settings-submit').addEventListener('click', async () => {
         default_support_group_id: settingsDefaults.sgId || null,
         default_support_group_name: settingsDefaults.sgName || null,
         minimize_to_tray: min_tray_new,
+        auto_claim_enabled: $('settings-auto-claim').checked,
+        auto_claim_seach_type: parseInt($('settings-auto-claim-view').value) || null,
       }
     });
     if (autostart_new !== cur.autostart_enabled) {

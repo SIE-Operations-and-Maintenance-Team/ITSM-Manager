@@ -22,7 +22,11 @@ html, body { margin: 0; height: 100vh; font-family: "Microsoft YaHei", "Segoe UI
 .login-box { background: var(--panel); padding: 40px 48px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.08); text-align: center; min-width: 320px; }
 .login-box h1 { margin: 0 0 8px; font-size: 22px; }
 .muted { color: var(--muted); margin: 0 0 24px; }
+.login-input { width: 100%; box-sizing: border-box; padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; background: var(--panel); color: var(--text); }
+.login-input:focus { outline: none; border-color: #4a90d9; }
+.login-box .btn { width: 100%; margin-top: 6px; }
 .tip { color: var(--muted); font-size: 12px; margin-top: 16px; min-height: 16px; }
+.tip.error { color: #e53935; font-size: 15px; font-weight: 600; }
 
 /* 按钮 */
 .btn { padding: 6px 14px; border: 1px solid var(--border); background: var(--panel); border-radius: 4px; cursor: pointer; font-size: 13px; color: var(--text); }
@@ -54,6 +58,7 @@ html, body { margin: 0; height: 100vh; font-family: "Microsoft YaHei", "Segoe UI
 .search-bar .search-select { padding: 5px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text); background: #fff; cursor: pointer; }
 .search-bar .search-date { padding: 5px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; color: var(--text); background: #fff; }
 .search-bar .search-dash { color: var(--muted); }
+.search-bar .search-sep { width: 1px; height: 18px; background: var(--border); flex: 0 0 auto; }
 .search-bar .ac-wrap { position: relative; }
 .search-bar .s-kw { min-width: 220px; }
 .search-bar .s-cg { min-width: 160px; }

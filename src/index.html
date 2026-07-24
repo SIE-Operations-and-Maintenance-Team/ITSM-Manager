@@ -12,8 +12,12 @@
   <div id="login-screen" class="screen">
     <div class="login-box">
       <h1>ITSM 管理工具</h1>
-      <p class="muted">未登录或授权已失效</p>
-      <button id="login-btn" class="btn primary">登录 ITSM</button>
+      <p class="muted">请登录 ITSM 账号</p>
+      <input id="login-account" class="login-input" type="text" placeholder="账号（邮箱）" autocomplete="username">
+      <input id="login-password" class="login-input" type="password" placeholder="密码" autocomplete="current-password">
+      <label class="remember"><input id="login-remember" type="checkbox"> 记住密码</label>
+      <button id="login-btn" class="btn primary">登录</button>
+      <button id="login-external-btn" class="btn">外部窗口登录</button>
       <p id="login-tip" class="tip"></p>
     </div>
   </div>
@@ -40,6 +44,8 @@
     <main class="content">
       <section class="list-pane">
         <div class="search-bar">
+          <button id="claim-all-btn" class="btn small primary" hidden>一键接单 <span id="claim-all-count">0</span></button>
+          <span class="search-sep"></span>
           <button id="search-clear" class="btn small" title="清空所有搜索条件">清空</button>
           <input id="s-kw" class="search-input s-kw" placeholder="单号/主题/提单人/支持人" autocomplete="off">
           <select id="s-status" class="search-select"><option value="">全部状态</option></select>
@@ -94,6 +100,15 @@
       <h4>刷新间隔（秒，30–1800）</h4>
       <input type="number" id="settings-interval" min="30" max="1800" step="30">
       <span class="muted">5 分钟 = 300，0 仅在此对话框设为最小 30（暂停用顶部下拉"不刷新"）</span>
+    </div>
+    <div class="settings-section">
+      <h4>自动接单</h4>
+      <label class="row"><input type="checkbox" id="settings-auto-claim"> 启用自动接单</label>
+      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
+        <span>目标视图</span>
+        <select id="settings-auto-claim-view"><option value="">请选择</option></select>
+      </label>
+      <span class="muted">开启后，目标视图每次刷新出数据自动批量接单当前页</span>
     </div>
     <div class="settings-section">
       <h4>补单默认值（留空则每次手选）</h4>

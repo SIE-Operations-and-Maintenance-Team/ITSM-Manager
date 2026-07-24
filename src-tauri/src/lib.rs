@@ -12,16 +12,28 @@ use tauri::{Emitter, Listener, Manager};
 
 /// 打开登录窗口（嵌入 ITSM 登录页，通过本地 HTTP server + image beacon 回传 token）
 #[tauri::command]
-async fn open_login(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), String> {
+    let visible = visible.unwrap_or(true); // 默认显示（手动登录）；login_auto 传 false 隐藏
     use tauri::webview::WebviewWindowBuilder;
     let url: tauri::Url = "https://help.chinasie.com/login?redirect=/maintenance"
         .parse()
         .map_err(|e| format!("URL 解析失败: {}", e))?;
-    WebviewWindowBuilder::new(&app, "login", tauri::WebviewUrl::External(url))
+    let login_url = "https://help.chinasie.com/login?redirect=/maintenance";
+    let win = WebviewWindowBuilder::new(&app, "login", tauri::WebviewUrl::External(url))
         .title("ITSM 登录")
         .inner_size(1000.0, 720.0)
+        .visible(visible)
         .build()
         .map_err(|e| format!("打开登录窗口失败: {}", e))?;
+    // 清残留 session（HttpOnly cookie + localStorage）：ITSM 靠 cookie 自动跳 /maintenance，
+    // JS 清不了 HttpOnly cookie，必须用 clear_all_browsing_data 彻底清。
+    let _ = win.clear_all_browsing_data();
+    // 延迟 reload login：clear 后 ITSM 无 session 不跳，留 /login 供用户/自动填充输账密
+    let win_for_reload = win.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let _ = win_for_reload.eval(&format!("location.href='{}';", login_url));
+    });
 
     const PORT: u16 = 17539;
     let app_srv = app.clone();
@@ -76,12 +88,35 @@ async fn open_login(app: tauri::AppHandle) -> Result<(), String> {
                     }
                     break;
                 }
+            } else if path.starts_with("/login_fail") {
+                // 登录失败回传（填充脚本 hook XHR 捕获 code≠800）：emit login-failed + 关窗
+                let q = path.split_once('?').map(|(_, q)| q).unwrap_or("");
+                let mut msg = String::new();
+                for pair in q.split('&') {
+                    if let Some((k, v)) = pair.split_once('=') {
+                        if k == "msg" {
+                            msg = url_decode(v);
+                        }
+                    }
+                }
+                let _ = app_srv.emit("login-failed", msg);
+                if let Some(w) = app_srv.get_webview_window("login") {
+                    let _ = w.close();
+                }
+            } else if path.starts_with("/login_captcha") {
+                // 验证码场景：显示 webview 窗口，让用户手动输验证码 + 点登录
+                let _ = app_srv.emit("login-captcha", ());
+                if let Some(w) = app_srv.get_webview_window("login") {
+                    let _ = w.show();
+                }
             }
         }
     });
 
     let app_poll = app.clone();
     std::thread::spawn(move || {
+        // 延迟启动 beacon：等 clear_all_browsing_data + reload 完成，防残留 session 的 token 被拿
+        std::thread::sleep(std::time::Duration::from_millis(1500));
         let beacon = "try{var t=localStorage.getItem('GuShen_Token')||'';var u=localStorage.getItem('userFullName')||'';var ti=localStorage.getItem('tenantId')||'';if(t.length>20&&!window.__tokenSent){window.__tokenSent=true;new Image().src='http://127.0.0.1:17539/cb?t='+encodeURIComponent(t)+'&u='+encodeURIComponent(u)+'&ti='+encodeURIComponent(ti);}}catch(e){}";
         loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -99,6 +134,42 @@ async fn open_login(app: tauri::AppHandle) -> Result<(), String> {
         }
     });
 
+    Ok(())
+}
+
+/// 账号密码自动登录（方向 X MVP）：复用 open_login 开窗口/server/beacon + 注入填充脚本自动输账密
+#[tauri::command]
+async fn login_auto(app: tauri::AppHandle, account: String, password: String) -> Result<(), String> {
+    // 1. 复用 open_login：开隐藏 "login" 窗口 + 本地 server 17539 + beacon 轮询线程（隐藏，验证码时显示）
+    open_login(app.clone(), Some(false)).await?;
+    // 2. spawn 自动填充线程：URL=/login 时注入填充脚本（账密用 serde_json 转义防注入）
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let acct_json = serde_json::to_string(&account).unwrap_or_else(|_| "\"\"".into());
+        let pwd_json = serde_json::to_string(&password).unwrap_or_else(|_| "\"\"".into());
+        let fill = format!(
+            r#"try{{if(!window.__failHooked){{window.__failHooked=true;var os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(){{var x=this;x.addEventListener('load',function(){{try{{var u=x.responseURL||'';if(u.indexOf('/base-user/login')>=0){{var r=JSON.parse(x.responseText);if(r.code!=800){{var m=r.msg||'';if(m.indexOf('验证码')>=0){{new Image().src='http://127.0.0.1:17539/login_captcha';}}else{{new Image().src='http://127.0.0.1:17539/login_fail?msg='+encodeURIComponent(m);}}}}}}}}catch(e){{}}}});return os.apply(this,arguments);}};}}var a=document.querySelector('input[name="account"]');var p=document.querySelector('input[name="password"]');if(a&&p&&!window.__autoFilled){{window.__autoFilled=true;var s=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;s.call(a,{acct});a.dispatchEvent(new Event('input',{{bubbles:true}}));s.call(p,{pwd});p.dispatchEvent(new Event('input',{{bubbles:true}}));setTimeout(function(){{var b=document.querySelector('button.login-btn');if(b)b.click();}},300);}}}}catch(e){{}}"#,
+            acct = acct_json,
+            pwd = pwd_json
+        );
+        for _ in 0..15 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            match app2.get_webview_window("login") {
+                Some(w) => {
+                    let url = w.url().map(|u| u.as_str().to_string()).unwrap_or_default();
+                    if url.contains("/login") {
+                        let _ = w.eval(&fill);
+                    } else if url.contains("/maintenance")
+                        || url.contains("/portal")
+                        || url.contains("/SelfServiceCenter")
+                    {
+                        break; // 已登录跳转，beacon 线程接管拿 token
+                    }
+                }
+                None => break,
+            }
+        }
+    });
     Ok(())
 }
 
@@ -219,6 +290,10 @@ pub fn run() {
             commands::upload_attachment,
             commands::save_detail_width,
             open_login,
+            login_auto,
+            commands::save_stored_cred,
+            commands::load_stored_cred,
+            commands::clear_stored_cred,
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {

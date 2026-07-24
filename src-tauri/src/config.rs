@@ -49,6 +49,12 @@ pub struct Config {
     /// 暂停前的有效刷新间隔，用于托盘"恢复"。总是 > 0。
     #[serde(default = "default_last_interval")]
     pub last_interval_sec: u64,
+    /// 启用自动接单（仅对 auto_claim_seach_type 视图生效）。默认关——用户主动开。
+    #[serde(default)]
+    pub auto_claim_enabled: bool,
+    /// 自动接单目标视图 seachType；首次启动由前端按 viewName='待我接单' 自动填。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_claim_seach_type: Option<i64>,
 }
 
 fn default_true() -> bool { true }
@@ -71,6 +77,8 @@ impl Config {
             minimize_to_tray: true,
             tray_hint_shown: false,
             last_interval_sec: DEFAULT_INTERVAL,
+            auto_claim_enabled: false,
+            auto_claim_seach_type: None,
         }
     }
 
@@ -172,20 +180,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300 }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300 }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300 };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -234,6 +242,7 @@ mod tests {
             detail_width_pct: Some(10.0),
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 300,
+            auto_claim_enabled: false, auto_claim_seach_type: None,
         }.normalize();
         assert_eq!(c.detail_width_pct, Some(20.0));
     }
@@ -260,6 +269,7 @@ mod tests {
             view_page_sizes: HashMap::new(), detail_width_pct: None,
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 0,
+            auto_claim_enabled: false, auto_claim_seach_type: None,
         };
         assert_eq!(base().normalize().last_interval_sec, 30, "0 -> 最小 30");
         let mut c = base(); c.last_interval_sec = 5;
@@ -278,6 +288,7 @@ mod tests {
             view_page_sizes: HashMap::new(), detail_width_pct: None,
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 120,
+            auto_claim_enabled: false, auto_claim_seach_type: None,
         };
         c = c.normalize();
         assert_eq!(c.interval_sec, 0, "interval 0 = 暂停，保留");
@@ -294,6 +305,7 @@ mod tests {
             view_page_sizes: HashMap::new(), detail_width_pct: None,
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 300,
+            auto_claim_enabled: false, auto_claim_seach_type: None,
         };
         // 暂停：记 last=300，interval->0
         c = c.toggled_pause();
@@ -302,5 +314,39 @@ mod tests {
         // 恢复：interval<-last
         c = c.toggled_pause();
         assert_eq!(c.interval_sec, 300);
+    }
+
+    #[test]
+    fn default_with_auto_claim_off() {
+        let c = Config::default_with(2);
+        assert!(!c.auto_claim_enabled);
+        assert_eq!(c.auto_claim_seach_type, None);
+    }
+
+    #[test]
+    fn old_config_without_auto_claim_fields_compat() {
+        // 旧 config 缺 auto_claim_* 字段，应反序列化成功并补默认
+        let json = r#"{
+            "whitelist":[2],
+            "interval_sec":300,
+            "view_page_sizes":{},
+            "autostart_enabled":false,
+            "minimize_to_tray":true,
+            "tray_hint_shown":false,
+            "last_interval_sec":300
+        }"#;
+        let c: Config = serde_json::from_str(json).unwrap();
+        assert!(!c.auto_claim_enabled);
+        assert_eq!(c.auto_claim_seach_type, None);
+    }
+
+    #[test]
+    fn normalize_preserves_auto_claim() {
+        let mut c = Config::default_with(2);
+        c.auto_claim_enabled = true;
+        c.auto_claim_seach_type = Some(5);
+        let n = c.clone().normalize();
+        assert!(n.auto_claim_enabled);
+        assert_eq!(n.auto_claim_seach_type, Some(5));
     }
 }

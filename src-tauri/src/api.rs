@@ -4,22 +4,37 @@ use serde_json::{json, Value};
 
 const API_BASE: &str = "https://api-itsm.chinasie.com";
 
+/// token 失效/权限不通过时，后端返给前端的统一错误标识（前端据此 showLogin）
+pub const AUTH_EXPIRED_ERR: &str = "登录已失效";
+
+/// ITSM 网关对失效 token 返回 HTTP 200 + 业务码 body，靠此字段识别。
+/// 已验证响应：{"code":"-1","msgCode":"1011_common_119","status":"PERMISSION_NOT_PASS"}
+fn is_permission_not_pass(v: &Value) -> bool {
+    v.get("status")
+        .and_then(|s| s.as_str())
+        .map_or(false, |s| s == "PERMISSION_NOT_PASS")
+}
+
 pub async fn do_get(
     client: &reqwest::Client,
     token: &str,
     path: &str,
 ) -> Result<Value, String> {
     let url = format!("{}{}", API_BASE, path);
-    client
+    let v: Value = client
         .get(&url)
         .header("authorization", token)
         .header("language", "zh#cn")
         .send()
         .await
         .map_err(|e| format!("请求失败: {}", e))?
-        .json::<Value>()
+        .json()
         .await
-        .map_err(|e| format!("解析失败: {}", e))
+        .map_err(|e| format!("解析失败: {}", e))?;
+    if is_permission_not_pass(&v) {
+        return Err(AUTH_EXPIRED_ERR.into());
+    }
+    Ok(v)
 }
 
 pub async fn do_post(
@@ -29,7 +44,7 @@ pub async fn do_post(
     body: Value,
 ) -> Result<Value, String> {
     let url = format!("{}{}", API_BASE, path);
-    client
+    let v: Value = client
         .post(&url)
         .header("authorization", token)
         .header("language", "zh#cn")
@@ -38,9 +53,13 @@ pub async fn do_post(
         .send()
         .await
         .map_err(|e| format!("请求失败: {}", e))?
-        .json::<Value>()
+        .json()
         .await
-        .map_err(|e| format!("解析失败: {}", e))
+        .map_err(|e| format!("解析失败: {}", e))?;
+    if is_permission_not_pass(&v) {
+        return Err(AUTH_EXPIRED_ERR.into());
+    }
+    Ok(v)
 }
 
 pub async fn list_views(client: &reqwest::Client, token: &str) -> Result<Value, String> {
@@ -561,6 +580,9 @@ pub async fn fetch_tickets_raw(
         .json()
         .await
         .map_err(|e| FetchError::Server(format!("解析失败: {}", e)))?;
+    if is_permission_not_pass(&v) {
+        return Err(FetchError::Auth);
+    }
     parse_tickets_response(&v)
 }
 

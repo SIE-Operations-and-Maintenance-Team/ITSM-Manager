@@ -25,6 +25,13 @@ pub struct Creds {
     pub user_name: String,
 }
 
+/// "记住密码"保存的账密（MVP 明文存 stored-cred.json，后续应换 stronghold/keychain 加密）
+#[derive(Serialize, Deserialize, Clone)]
+pub struct StoredCred {
+    pub account: String,
+    pub password: String,
+}
+
 pub fn app_data_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     use tauri::Manager;
     app.path().app_data_dir().ok().map(|dir| {
@@ -35,6 +42,10 @@ pub fn app_data_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 pub fn creds_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     app_data_dir(app).map(|dir| dir.join("credentials.json"))
+}
+
+pub fn stored_cred_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app_data_dir(app).map(|dir| dir.join("stored-cred.json"))
 }
 
 pub fn get_token(state: &tauri::State<AppState>) -> Result<String, String> {
