@@ -202,11 +202,11 @@ dialog .rich-editor { margin-top: 4px; }
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 12px 14px;
-  margin-bottom: 12px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
 }
 .set-group h5 { margin: 0 0 8px; font-size: 13px; color: var(--text); font-weight: 600; }
-.set-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--text); }
+.set-row { display: flex; align-items: center; gap: 8px; padding: 9px 0; font-size: 13px; color: var(--text); }
 .set-desc { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
 
 /* toggle 开关（checkbox 套壳；:has 选中考 WebView2/Chromium 支持） */
@@ -215,3 +215,28 @@ dialog .rich-editor { margin-top: 4px; }
 .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
 .toggle:has(input:checked) { background: var(--primary); }
 .toggle:has(input:checked)::after { transform: translateX(16px); }
+
+/* 统一 settings-dialog 内 input/select 样式（与 .field 内一致：原本只作用 .field，settings 用 .set-row 命不中） */
+#settings-dialog input[type=text],
+#settings-dialog select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+}
+#settings-dialog input:focus,
+#settings-dialog select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* 白名单列表项：去默认 .row 的 margin，与 set-row 字号/行距对齐 */
+#settings-dialog .whitelist-list .row {
+  padding: 7px 0;
+  margin: 0;
+  font-size: 13px;
+}
