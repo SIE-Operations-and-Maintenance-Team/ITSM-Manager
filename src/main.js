@@ -1342,8 +1342,23 @@ async function openSettings() {
   }
   fillSelect($('settings-sg-select'), allSupportGroups, 'sgId', 'supportGroupName', '请选择');
   $('settings-sg-select').value = settingsDefaults.sgId;
-  dlg.showModal();
+  // 复位到常规 tab（HTML 虽带默认 active，但上次切到的 tab 会保留，再开需复位）
+  switchSettingsTab('general');
+  openDlg(dlg);
 }
+
+// 侧栏分组切换：同步 nav button 与 section 的 .active
+function switchSettingsTab(tab) {
+  document.querySelectorAll('#settings-dialog .settings-nav button').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  document.querySelectorAll('#settings-dialog .settings-body > section').forEach(s => {
+    s.classList.toggle('active', s.dataset.pane === tab);
+  });
+}
+document.querySelectorAll('#settings-dialog .settings-nav button').forEach(btn => {
+  btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));
+});
 
 // 设置里的 autocomplete（点选只更新 settingsDefaults，确定时才落盘）
 attachAutocomplete('settings-cg-input', 'settings-cg-list',
