@@ -3,6 +3,7 @@ mod api;
 mod cache;
 mod commands;
 mod config;
+mod mcp;
 mod scheduler;
 mod state;
 mod tray;
