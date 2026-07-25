@@ -217,7 +217,7 @@ dialog .rich-editor { margin-top: 4px; }
 .toggle:has(input:checked)::after { transform: translateX(16px); }
 
 /* 统一 settings-dialog 内 input/select 样式（与 .field 内一致：原本只作用 .field，settings 用 .set-row 命不中） */
-#settings-dialog input[type=text],
+#settings-dialog input:not([type=checkbox]),
 #settings-dialog select {
   width: 100%;
   padding: 6px 8px;
