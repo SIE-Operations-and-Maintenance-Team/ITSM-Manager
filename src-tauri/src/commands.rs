@@ -42,7 +42,7 @@ pub fn save_creds(creds: state::Creds, app: AppHandle, state: State<AppState>) -
     Ok(())
 }
 
-/// 登出：清凭证 + 清缓存 + 清配置（下个用户干净启动）
+/// 登出：清凭证 + 清缓存（保留 config.json，配置与登录态解绑）
 #[tauri::command]
 pub fn clear_creds(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     *state.token.lock().unwrap() = None;
@@ -50,7 +50,8 @@ pub fn clear_creds(app: AppHandle, state: State<AppState>) -> Result<(), String>
         let _ = std::fs::remove_file(p);
     }
     if let Some(d) = state::app_data_dir(&app) {
-        let _ = std::fs::remove_file(d.join("config.json"));
+        // 不删 config.json：用户偏好（白名单/间隔/补单默认值/分页/托盘设置）跨登录保留，
+        // 因 token 会过期、登出重登是高频操作。仅清账号相关的工单缓存。
         let _ = std::fs::remove_dir_all(d.join("cache"));
     }
     Ok(())

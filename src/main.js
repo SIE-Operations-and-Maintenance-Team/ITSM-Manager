@@ -313,6 +313,9 @@ async function init() {
 function showLogin() {
   $('login-screen').hidden = false;
   $('main-screen').hidden = true;
+  // 复位登录态：首次登录成功后 disabled 残留 true，tip 残留"登录成功"
+  $('login-btn').disabled = false;
+  setTip('');
 }
 
 function showMain(creds) {
@@ -378,7 +381,7 @@ listen('login-captcha', () => {
 });
 
 $('logout-btn').addEventListener('click', async () => {
-  if (!confirm('确定登出？将清除本地缓存与配置。')) return;
+  if (!confirm('确定登出？将清除本地缓存与登录凭证（用户设置会保留）。')) return;
   await invoke('clear_creds');
   showLogin();
 });
