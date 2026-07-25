@@ -59,6 +59,40 @@ struct GetDetailParams {
     id: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ReplyParams {
+    #[schemars(description = "工单 incidentId")]
+    order_id: String,
+    #[schemars(description = "回复内容；可传纯文本或 ITSM 可接受的 HTML")]
+    detail: String,
+    #[schemars(description = "true 表示内部备注，false 表示公开回复")]
+    is_private: bool,
+    #[schemars(description = "ITSM 工单类型；现有前端默认传字符串 1")]
+    order_type: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SuspendParams {
+    #[schemars(description = "工单 incidentId")]
+    id: String,
+    #[schemars(description = "暂挂原因")]
+    reason: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct UnhangParams {
+    #[schemars(description = "工单 incidentId")]
+    id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ResolveParams {
+    #[schemars(description = "工单 incidentId")]
+    id: String,
+    #[schemars(description = "解决方案；不能为空")]
+    solution: String,
+}
+
 fn api_error(message: impl Into<String>) -> McpError {
     McpError::internal_error(message.into(), None)
 }
@@ -218,6 +252,121 @@ impl ItsmHandler {
             .map_err(api_error)?;
         Ok(json_result(value))
     }
+
+    #[tool(
+        description = "回复工单。首版不上传附件，fileIds 固定为空；本操作会修改真实 ITSM 工单。",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn reply(
+        &self,
+        Parameters(params): Parameters<ReplyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let order_id = required_text("order_id", params.order_id)?;
+        let detail = required_text("detail", params.detail)?;
+        let order_type = required_text("order_type", params.order_type)?;
+        let value = api::reply(
+            &self.client,
+            &token,
+            &order_id,
+            &detail,
+            &[],
+            params.is_private,
+            &order_type,
+        )
+        .await
+        .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "暂挂工单并记录暂挂原因；本操作会修改真实 ITSM 工单。",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn suspend(
+        &self,
+        Parameters(params): Parameters<SuspendParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let id = required_text("id", params.id)?;
+        let reason = required_text("reason", params.reason)?;
+        let value = api::suspend_or_unhang(
+            &self.client,
+            &token,
+            &id,
+            "suspend",
+            &reason,
+        )
+        .await
+        .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "解除工单暂挂；本操作会修改真实 ITSM 工单。",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn unhang(
+        &self,
+        Parameters(params): Parameters<UnhangParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let id = required_text("id", params.id)?;
+        let value = api::suspend_or_unhang(
+            &self.client,
+            &token,
+            &id,
+            "unhang",
+            "",
+        )
+        .await
+        .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "将工单状态改为 Resolved 并写入解决方案；本操作会修改真实 ITSM 工单。",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn resolve(
+        &self,
+        Parameters(params): Parameters<ResolveParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let id = required_text("id", params.id)?;
+        let solution = required_text("solution", params.solution)?;
+        let value = api::change_status(
+            &self.client,
+            &token,
+            &id,
+            "Resolved",
+            &solution,
+            true,
+        )
+        .await
+        .map_err(api_error)?;
+        Ok(json_result(value))
+    }
 }
 
 #[cfg(test)]
@@ -229,18 +378,29 @@ mod tests {
     }
 
     #[test]
-    fn exposes_four_read_tools() {
-        let names: Vec<String> = ItsmHandler::tool_router()
-            .list_all()
-            .into_iter()
-            .map(|t| t.name.into_owned())
+    fn exposes_exactly_eight_tools() {
+        let tools = ItsmHandler::tool_router().list_all();
+        let names: Vec<String> = tools
+            .iter()
+            .map(|t| t.name.to_string())
             .collect();
         assert_eq!(names, vec![
             "get_detail",
             "list_views",
+            "reply",
+            "resolve",
             "search_tickets_by_code",
             "search_tickets_by_customer_group",
+            "suspend",
+            "unhang",
         ]);
+
+        for tool in &tools {
+            let annotations = tool.annotations.as_ref().unwrap();
+            let is_write = matches!(tool.name.as_ref(), "reply" | "resolve" | "suspend" | "unhang");
+            assert_eq!(annotations.read_only_hint, Some(!is_write), "{}", tool.name);
+            assert_eq!(annotations.destructive_hint, Some(is_write), "{}", tool.name);
+        }
     }
 
     #[test]
@@ -261,6 +421,20 @@ mod tests {
     #[tokio::test]
     async fn list_views_without_login_returns_mcp_error() {
         let err = handler().list_views().await.unwrap_err();
+        assert_eq!(err.message, "未登录");
+    }
+
+    #[tokio::test]
+    async fn reply_without_login_stops_before_network() {
+        let err = handler()
+            .reply(Parameters(ReplyParams {
+                order_id: "OID".into(),
+                detail: "test".into(),
+                is_private: false,
+                order_type: "1".into(),
+            }))
+            .await
+            .unwrap_err();
         assert_eq!(err.message, "未登录");
     }
 }

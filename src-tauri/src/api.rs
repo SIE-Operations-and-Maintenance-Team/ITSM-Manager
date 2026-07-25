@@ -205,7 +205,7 @@ pub async fn do_post_multipart(
     form: reqwest::multipart::Form,
 ) -> Result<Value, String> {
     let url = format!("{}{}", API_BASE, path);
-    client
+    let v = client
         .post(&url)
         .header("authorization", token)
         .header("language", "zh#cn")
@@ -215,7 +215,11 @@ pub async fn do_post_multipart(
         .map_err(|e| format!("上传失败: {}", e))?
         .json::<Value>()
         .await
-        .map_err(|e| format!("解析失败: {}", e))
+        .map_err(|e| format!("解析失败: {}", e))?;
+    if is_permission_not_pass(&v) {
+        return Err(AUTH_EXPIRED_ERR.into());
+    }
+    Ok(v)
 }
 
 /// 纯解析：上传响应 → UploadResult（成功码 800）
@@ -772,5 +776,16 @@ mod tests {
         let p = body.get("params").unwrap();
         assert_eq!(p.get("fileIds").unwrap(), &json!([]));
         assert_eq!(p.get("isPrivate").unwrap(), &json!(1));
+    }
+
+    #[test]
+    fn permission_not_pass_is_detected_for_all_http_helpers() {
+        let v = json!({
+            "code": "-1",
+            "msgCode": "1011_common_119",
+            "status": "PERMISSION_NOT_PASS"
+        });
+        assert!(is_permission_not_pass(&v));
+        assert!(!is_permission_not_pass(&json!({"code": 800})));
     }
 }
