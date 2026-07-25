@@ -20,7 +20,7 @@ pub fn get_creds(app: AppHandle, state: State<AppState>) -> Option<state::Creds>
     if let Some(p) = state::creds_path(&app) {
         if let Ok(s) = std::fs::read_to_string(&p) {
             if let Ok(c) = serde_json::from_str::<state::Creds>(&s) {
-                *state.token.lock().unwrap() = Some(c.token.clone());
+                state.token.set(Some(c.token.clone()));
                 *state.tenant_id.lock().unwrap() = c.tenant_id.clone();
                 *state.user_name.lock().unwrap() = c.user_name.clone();
                 return Some(c);
@@ -32,7 +32,7 @@ pub fn get_creds(app: AppHandle, state: State<AppState>) -> Option<state::Creds>
 
 #[tauri::command]
 pub fn save_creds(creds: state::Creds, app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    *state.token.lock().unwrap() = Some(creds.token.clone());
+    state.token.set(Some(creds.token.clone()));
     *state.tenant_id.lock().unwrap() = creds.tenant_id.clone();
     *state.user_name.lock().unwrap() = creds.user_name.clone();
     if let Some(p) = state::creds_path(&app) {
@@ -45,7 +45,7 @@ pub fn save_creds(creds: state::Creds, app: AppHandle, state: State<AppState>) -
 /// 登出：清凭证 + 清缓存（保留 config.json，配置与登录态解绑）
 #[tauri::command]
 pub fn clear_creds(app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    *state.token.lock().unwrap() = None;
+    state.token.set(None);
     if let Some(p) = state::creds_path(&app) {
         let _ = std::fs::remove_file(p);
     }

@@ -93,7 +93,7 @@ async fn run_loop(app: AppHandle, fallback_st: i64) {
 }
 
 fn get_token_from_app(app: &AppHandle) -> Result<String, ()> {
-    app.state::<AppState>().token.lock().unwrap().clone().ok_or(())
+    app.state::<AppState>().token.get().map_err(|_| ())
 }
 
 #[cfg(test)]

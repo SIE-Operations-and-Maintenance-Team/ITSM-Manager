@@ -199,7 +199,7 @@ fn url_decode(s: &str) -> String {
 
 fn save_creds_internal(app: &tauri::AppHandle, creds: Creds) {
     let st = app.state::<AppState>();
-    *st.token.lock().unwrap() = Some(creds.token.clone());
+    st.token.set(Some(creds.token.clone()));
     *st.tenant_id.lock().unwrap() = creds.tenant_id.clone();
     *st.user_name.lock().unwrap() = creds.user_name.clone();
     if let Some(p) = state::creds_path(app) {
@@ -222,7 +222,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
-            token: std::sync::Mutex::new(None),
+            token: state::TokenStore::default(),
             tenant_id: std::sync::Mutex::new(state::DEFAULT_TENANT.into()),
             user_name: std::sync::Mutex::new(String::new()),
             client: reqwest::Client::builder()
