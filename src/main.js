@@ -1345,6 +1345,9 @@ async function openSettings() {
   }
   fillSelect($('settings-sg-select'), allSupportGroups, 'sgId', 'supportGroupName', '请选择');
   $('settings-sg-select').value = settingsDefaults.sgId;
+  // MCP 配置回填
+  $('settings-mcp-enabled').checked = !!cfg.mcp_enabled;
+  $('settings-mcp-port').value = cfg.mcp_port || 17540;
   // 复位到常规 tab（HTML 虽带默认 active，但上次切到的 tab 会保留，再开需复位）
   switchSettingsTab('general');
   openDlg(dlg);
@@ -1394,6 +1397,13 @@ $('settings-submit').addEventListener('click', async () => {
     const cur = await invoke('get_config', { seachType: currentSeachType });
     const min_tray_new = $('settings-min-tray').checked;
     const autostart_new = $('settings-autostart').checked;
+    const mcp_enabled_new = $('settings-mcp-enabled').checked;
+    const mcp_port_new = Number($('settings-mcp-port').value);
+    if (!Number.isInteger(mcp_port_new) || mcp_port_new < 1024 || mcp_port_new > 65535) {
+      switchSettingsTab('mcp');
+      return toast('MCP 端口必须是 1024–65535 的整数', 'error');
+    }
+    const mcp_changed = mcp_enabled_new !== cur.mcp_enabled || mcp_port_new !== cur.mcp_port;
     await invoke('save_config', {
       config: {
         ...cur,
@@ -1407,13 +1417,15 @@ $('settings-submit').addEventListener('click', async () => {
         minimize_to_tray: min_tray_new,
         auto_claim_enabled: $('settings-auto-claim').checked,
         auto_claim_seach_type: parseInt($('settings-auto-claim-view').value) || null,
+        mcp_enabled: mcp_enabled_new,
+        mcp_port: mcp_port_new,
       }
     });
     if (autostart_new !== cur.autostart_enabled) {
       await invoke('set_autostart', { enabled: autostart_new });
     }
     $('settings-dialog').close();
-    toast('已保存', 'success');
+    toast(mcp_changed ? '已保存；MCP 配置重启应用后生效' : '已保存', 'success');
   } catch (e) {
     toast('保存失败: ' + e, 'error');
   }
