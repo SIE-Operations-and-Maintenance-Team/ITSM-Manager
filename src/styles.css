@@ -156,3 +156,62 @@ dialog .field input:focus, dialog .field select:focus, dialog .field textarea:fo
 .rich-editor .w-e-text-container { min-height: 220px; max-height: 50vh; overflow-y: auto; }
 .rich-editor .w-e-text-placeholder { color: var(--muted); }
 dialog .rich-editor { margin-top: 4px; }
+
+/* ============ 设置弹窗：侧栏分组 ============ */
+/* 覆盖 .dialog-wide 的 820，单独定 900；最小宽 700 / 最小高 480 */
+#settings-dialog { width: 900px; }
+#settings-dialog.dialog-resizable { min-width: 700px; min-height: 480px; }
+
+/* 侧栏 + 内容 双栏 grid（父 dialog-resizable[open] 是 flex column，layout 占满剩余高度） */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 侧栏导航 */
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border);
+  padding-right: 12px;
+}
+.settings-nav button {
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+.settings-nav button:hover { background: #eef1f5; color: var(--text); }
+.settings-nav button.active { background: var(--primary); color: #fff; }
+
+/* 内容区：按 data-pane 显隐 */
+.settings-body { overflow-y: auto; padding-right: 4px; }
+.settings-body > section { display: none; }
+.settings-body > section.active { display: block; }
+
+/* 分组卡片 */
+.set-group {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.set-group h5 { margin: 0 0 8px; font-size: 13px; color: var(--text); font-weight: 600; }
+.set-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--text); }
+.set-desc { color: var(--muted); font-size: 12px; margin: 4px 0 8px; }
+
+/* toggle 开关（checkbox 套壳；:has 选中考 WebView2/Chromium 支持） */
+.toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; background: #ccc; border-radius: 10px; transition: background .15s; }
+.toggle input { opacity: 0; position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.toggle:has(input:checked) { background: var(--primary); }
+.toggle:has(input:checked)::after { transform: translateX(16px); }
