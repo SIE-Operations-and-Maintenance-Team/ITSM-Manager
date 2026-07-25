@@ -369,6 +369,39 @@ impl ItsmHandler {
     }
 }
 
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService,
+    session::local::LocalSessionManager,
+};
+
+fn build_router(token: TokenStore, client: reqwest::Client) -> axum::Router {
+    let config = StreamableHttpServerConfig::default()
+        .with_stateful_mode(false)
+        .with_json_response(true)
+        .with_sse_keep_alive(None);
+    let service: StreamableHttpService<ItsmHandler, LocalSessionManager> =
+        StreamableHttpService::new(
+            move || Ok(ItsmHandler::new(token.clone(), client.clone())),
+            Default::default(),
+            config,
+        );
+    axum::Router::new().nest_service("/mcp", service)
+}
+
+pub async fn serve(
+    token: TokenStore,
+    client: reqwest::Client,
+    port: u16,
+) -> Result<(), String> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .map_err(|error| format!("绑定 127.0.0.1:{port} 失败: {error}"))?;
+    println!("[mcp] listening on http://127.0.0.1:{port}/mcp");
+    axum::serve(listener, build_router(token, client))
+        .await
+        .map_err(|error| format!("MCP server 退出: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +469,87 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.message, "未登录");
+    }
+
+    async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = build_router(TokenStore::default(), reqwest::Client::new());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (format!("http://{addr}/mcp"), task)
+    }
+
+    async fn post_rpc(
+        client: &reqwest::Client,
+        url: &str,
+        body: Value,
+        protocol_version: Option<&str>,
+    ) -> Value {
+        let mut request = client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&body);
+        if let Some(version) = protocol_version {
+            request = request.header("MCP-Protocol-Version", version);
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(content_type.contains("application/json"));
+        response.json().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn streamable_http_initializes_and_lists_eight_tools() {
+        let (url, task) = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        let initialized = post_rpc(
+            &client,
+            &url,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "itsm-manager-test", "version": "1.0.0"}
+                }
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+        let listed = post_rpc(
+            &client,
+            &url,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {}
+            }),
+            Some("2025-11-25"),
+        )
+        .await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 8);
+        assert!(tools.iter().any(|tool| tool["name"] == "list_views"));
+        assert!(tools.iter().any(|tool| tool["name"] == "resolve"));
+
+        task.abort();
     }
 }

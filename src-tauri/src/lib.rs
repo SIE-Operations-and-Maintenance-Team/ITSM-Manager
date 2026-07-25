@@ -239,6 +239,20 @@ pub fn run() {
                 .0
                 .restart(handle, state::DEFAULT_SEACH_TYPE);
 
+            // MCP server：按 config.mcp_enabled 决定是否启动；bind 失败只 eprintln 不拖垮 UI
+            let cfg = config::load(app.handle(), state::DEFAULT_SEACH_TYPE);
+            if cfg.mcp_enabled {
+                let app_state = app.state::<AppState>();
+                let token = app_state.token.clone();
+                let client = app_state.client.clone();
+                let port = cfg.mcp_port;
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = mcp::serve(token, client, port).await {
+                        eprintln!("[mcp] {error}；MCP 不可用，主界面继续运行");
+                    }
+                });
+            }
+
             tray::build(app.handle())?;
 
             // 启动隐藏判断：autostart 注册时带 --hidden；命中则不 show 主窗口
