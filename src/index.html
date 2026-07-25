@@ -85,56 +85,75 @@
     </main>
   </div>
 
-  <dialog id="settings-dialog" class="dialog">
-    <h3>刷新设置</h3>
-    <div class="settings-section">
-      <h4>应用行为</h4>
-      <label class="row"><input type="checkbox" id="settings-autostart"> 开机自启</label>
-      <label class="row"><input type="checkbox" id="settings-min-tray"> 关闭窗口时最小化到托盘（不退出）</label>
-    </div>
-    <div class="settings-section">
-      <h4>关注视图（自动刷新白名单）</h4>
-      <div id="settings-whitelist" class="whitelist-list"></div>
-    </div>
-    <div class="settings-section">
-      <h4>刷新间隔</h4>
-      <select id="settings-interval">
-        <option value="30">30 秒</option>
-        <option value="60">60 秒</option>
-        <option value="120">2 分钟（120 秒）</option>
-        <option value="300">5 分钟（300 秒）</option>
-      </select>
-      <span class="muted">与顶部下拉一致；暂停刷新用顶部"不刷新"</span>
-    </div>
-    <div class="settings-section">
-      <h4>自动接单</h4>
-      <label class="row"><input type="checkbox" id="settings-auto-claim"> 启用自动接单</label>
-      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
-        <span>目标视图</span>
-        <select id="settings-auto-claim-view"><option value="">请选择</option></select>
-      </label>
-      <span class="muted">开启后，目标视图每次刷新出数据自动批量接单当前页</span>
-    </div>
-    <div class="settings-section">
-      <h4>补单默认值（留空则每次手选）</h4>
-      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
-        <span>默认客户组</span>
-        <div class="ac-wrap">
-          <input id="settings-cg-input" placeholder="输入名称搜索" autocomplete="off">
-          <ul id="settings-cg-list" class="ac-list" hidden></ul>
-        </div>
-      </label>
-      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
-        <span>默认提单人</span>
-        <div class="ac-wrap">
-          <input id="settings-rq-input" placeholder="输入姓名搜索" autocomplete="off">
-          <ul id="settings-rq-list" class="ac-list" hidden></ul>
-        </div>
-      </label>
-      <label class="row" style="flex-direction:column;align-items:stretch;gap:2px">
-        <span>默认支持组（补单 assign 必填）</span>
-        <select id="settings-sg-select"><option value="">请选择</option></select>
-      </label>
+  <dialog id="settings-dialog" class="dialog dialog-wide dialog-resizable">
+    <h3>设置</h3>
+    <div class="settings-layout">
+      <nav class="settings-nav">
+        <button type="button" class="active" data-tab="general">常规</button>
+        <button type="button" data-tab="views">视图与刷新</button>
+        <button type="button" data-tab="auto">自动化</button>
+        <button type="button" data-tab="budan">补单默认值</button>
+      </nav>
+      <div class="settings-body">
+        <section class="active" data-pane="general">
+          <div class="set-group">
+            <h5>启动与关闭</h5>
+            <label class="set-row"><span class="toggle"><input type="checkbox" id="settings-autostart"></span> 开机自启</label>
+            <label class="set-row"><span class="toggle"><input type="checkbox" id="settings-min-tray"></span> 关闭窗口时最小化到托盘（不退出）</label>
+          </div>
+          <div class="set-group">
+            <h5>刷新间隔</h5>
+          <label class="set-row" style="flex-direction:column;align-items:stretch;gap:4px">
+              <select id="settings-interval">
+                <option value="30">30 秒</option>
+                <option value="60">60 秒</option>
+                <option value="120">2 分钟（120 秒）</option>
+                <option value="300">5 分钟（300 秒）</option>
+              </select>
+            </label>
+            <div class="set-desc">与顶部下拉一致；暂停刷新用顶部"不刷新"</div>
+          </div>
+        </section>
+        <section data-pane="views">
+          <div class="set-group">
+            <div id="settings-whitelist" class="whitelist-list"></div>
+          </div>
+        </section>
+        <section data-pane="auto">
+          <div class="set-group">
+            <h5>自动接单</h5>
+            <label class="set-row"><span class="toggle"><input type="checkbox" id="settings-auto-claim"></span> 启用自动接单</label>
+            <label class="set-row" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span>目标视图</span>
+              <select id="settings-auto-claim-view"><option value="">请选择</option></select>
+            </label>
+            <div class="set-desc">开启后，目标视图每次刷新出数据自动批量接单当前页</div>
+          </div>
+        </section>
+        <section data-pane="budan">
+          <div class="set-group">
+            <h5>补单默认值（留空则每次手选）</h5>
+            <label class="set-row" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span>默认客户组</span>
+              <div class="ac-wrap">
+                <input id="settings-cg-input" placeholder="输入名称搜索" autocomplete="off">
+                <ul id="settings-cg-list" class="ac-list" hidden></ul>
+              </div>
+            </label>
+            <label class="set-row" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span>默认提单人</span>
+              <div class="ac-wrap">
+                <input id="settings-rq-input" placeholder="输入姓名搜索" autocomplete="off">
+                <ul id="settings-rq-list" class="ac-list" hidden></ul>
+              </div>
+            </label>
+            <label class="set-row" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span>默认支持组（补单 assign 必填）</span>
+              <select id="settings-sg-select"><option value="">请选择</option></select>
+            </label>
+          </div>
+        </section>
+      </div>
     </div>
     <div class="dialog-actions">
       <button class="btn" data-close>取消</button>
