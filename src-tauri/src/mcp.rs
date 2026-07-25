@@ -1,11 +1,10 @@
-// MCP 边界层：对外暴露 4 个只读 ITSM 工具，复用 api.rs HTTP 实现，零业务改动
+// MCP 边界层：对外暴露 8 个工单 tools（4 只读 + 4 写），复用 api.rs HTTP 实现，不含新 ITSM endpoint
 use crate::api::{self, FetchError, SearchParams, AUTH_EXPIRED_ERR};
 use crate::state::TokenStore;
 use rmcp::{
-    ErrorData as McpError,
     handler::server::wrapper::Parameters,
     model::{CallToolResult, ContentBlock},
-    schemars, tool, tool_router,
+    schemars, tool, tool_router, ErrorData as McpError,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -111,28 +110,19 @@ fn json_result(value: Value) -> CallToolResult {
 fn required_text(field: &str, value: String) -> Result<String, McpError> {
     let value = value.trim().to_string();
     if value.is_empty() {
-        return Err(McpError::invalid_params(
-            format!("{field} 不能为空"),
-            None,
-        ));
+        return Err(McpError::invalid_params(format!("{field} 不能为空"), None));
     }
     Ok(value)
 }
 
-fn pagination(
-    page_index: Option<i64>,
-    page_size: Option<i64>,
-) -> Result<(i64, i64), McpError> {
+fn pagination(page_index: Option<i64>, page_size: Option<i64>) -> Result<(i64, i64), McpError> {
     let page_index = page_index.unwrap_or(1);
     let page_size = page_size.unwrap_or(50);
     if page_index < 1 {
         return Err(McpError::invalid_params("page_index 必须 >= 1", None));
     }
     if !(1..=200).contains(&page_size) {
-        return Err(McpError::invalid_params(
-            "page_size 必须在 1..=200",
-            None,
-        ));
+        return Err(McpError::invalid_params("page_size 必须在 1..=200", None));
     }
     Ok((page_index, page_size))
 }
@@ -300,15 +290,9 @@ impl ItsmHandler {
         let token = self.token()?;
         let id = required_text("id", params.id)?;
         let reason = required_text("reason", params.reason)?;
-        let value = api::suspend_or_unhang(
-            &self.client,
-            &token,
-            &id,
-            "suspend",
-            &reason,
-        )
-        .await
-        .map_err(api_error)?;
+        let value = api::suspend_or_unhang(&self.client, &token, &id, "suspend", &reason)
+            .await
+            .map_err(api_error)?;
         Ok(json_result(value))
     }
 
@@ -327,15 +311,9 @@ impl ItsmHandler {
     ) -> Result<CallToolResult, McpError> {
         let token = self.token()?;
         let id = required_text("id", params.id)?;
-        let value = api::suspend_or_unhang(
-            &self.client,
-            &token,
-            &id,
-            "unhang",
-            "",
-        )
-        .await
-        .map_err(api_error)?;
+        let value = api::suspend_or_unhang(&self.client, &token, &id, "unhang", "")
+            .await
+            .map_err(api_error)?;
         Ok(json_result(value))
     }
 
@@ -355,23 +333,15 @@ impl ItsmHandler {
         let token = self.token()?;
         let id = required_text("id", params.id)?;
         let solution = required_text("solution", params.solution)?;
-        let value = api::change_status(
-            &self.client,
-            &token,
-            &id,
-            "Resolved",
-            &solution,
-            true,
-        )
-        .await
-        .map_err(api_error)?;
+        let value = api::change_status(&self.client, &token, &id, "Resolved", &solution, true)
+            .await
+            .map_err(api_error)?;
         Ok(json_result(value))
     }
 }
 
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService,
-    session::local::LocalSessionManager,
+    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 
 fn build_router(token: TokenStore, client: reqwest::Client) -> axum::Router {
@@ -388,11 +358,7 @@ fn build_router(token: TokenStore, client: reqwest::Client) -> axum::Router {
     axum::Router::new().nest_service("/mcp", service)
 }
 
-pub async fn serve(
-    token: TokenStore,
-    client: reqwest::Client,
-    port: u16,
-) -> Result<(), String> {
+pub async fn serve(token: TokenStore, client: reqwest::Client, port: u16) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| format!("绑定 127.0.0.1:{port} 失败: {error}"))?;
@@ -413,26 +379,34 @@ mod tests {
     #[test]
     fn exposes_exactly_eight_tools() {
         let tools = ItsmHandler::tool_router().list_all();
-        let names: Vec<String> = tools
-            .iter()
-            .map(|t| t.name.to_string())
-            .collect();
-        assert_eq!(names, vec![
-            "get_detail",
-            "list_views",
-            "reply",
-            "resolve",
-            "search_tickets_by_code",
-            "search_tickets_by_customer_group",
-            "suspend",
-            "unhang",
-        ]);
+        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "get_detail",
+                "list_views",
+                "reply",
+                "resolve",
+                "search_tickets_by_code",
+                "search_tickets_by_customer_group",
+                "suspend",
+                "unhang",
+            ]
+        );
 
         for tool in &tools {
             let annotations = tool.annotations.as_ref().unwrap();
-            let is_write = matches!(tool.name.as_ref(), "reply" | "resolve" | "suspend" | "unhang");
+            let is_write = matches!(
+                tool.name.as_ref(),
+                "reply" | "resolve" | "suspend" | "unhang"
+            );
             assert_eq!(annotations.read_only_hint, Some(!is_write), "{}", tool.name);
-            assert_eq!(annotations.destructive_hint, Some(is_write), "{}", tool.name);
+            assert_eq!(
+                annotations.destructive_hint,
+                Some(is_write),
+                "{}",
+                tool.name
+            );
         }
     }
 
@@ -472,9 +446,7 @@ mod tests {
     }
 
     async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = build_router(TokenStore::default(), reqwest::Client::new());
         let task = tokio::spawn(async move {
@@ -551,5 +523,6 @@ mod tests {
         assert!(tools.iter().any(|tool| tool["name"] == "resolve"));
 
         task.abort();
+        let _ = task.await;
     }
 }
