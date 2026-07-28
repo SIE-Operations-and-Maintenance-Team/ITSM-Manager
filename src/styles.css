@@ -70,7 +70,7 @@ tbody tr { cursor: pointer; }
 tbody tr:hover { background: #f7f9fc; }
 tbody tr.selected { background: #e8f1fd; }
 .col-code { white-space: nowrap; color: var(--primary); font-family: Consolas, monospace; }
-.col-subject { max-width: 380px; }
+.col-subject { max-width: 380px; overflow-wrap: anywhere; }
 .col-status .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
 .tag-Processing { background: #e6f0ff; color: #0a7be0; }
 .tag-Resolved { background: #e6f6ec; color: #2ea36b; }
@@ -79,8 +79,9 @@ tbody tr.selected { background: #e8f1fd; }
 .tag-Assigning { background: #fde8e8; color: #e3503b; }
 .tag-P1, .tag-P2 { color: var(--danger); font-weight: 600; }
 .col-time { white-space: nowrap; color: var(--muted); font-size: 12px; }
-.col-actions { white-space: nowrap; display: flex; gap: 4px; }
+.col-actions { white-space: nowrap; }
 .col-actions .btn { padding: 2px 6px; font-size: 11px; }
+.col-actions .btn + .btn { margin-left: 4px; }
 
 .pagination { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border); background: var(--panel); font-size: 12px; color: var(--muted); }
 .pagination .pg-info { margin: 0 4px; }
