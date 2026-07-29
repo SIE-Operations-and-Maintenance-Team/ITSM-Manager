@@ -299,23 +299,25 @@ async function init() {
     if (creds && creds.token) { showMain(creds); return; }
   } catch (e) {}
   showLogin();
-  // 加载已存账密（"记住密码"）
-  try {
-    const stored = await invoke('load_stored_cred');
-    if (stored) {
-      $('login-account').value = stored.account || '';
-      $('login-password').value = stored.password || '';
-      $('login-remember').checked = true;
-    }
-  } catch (e) {}
 }
 
-function showLogin() {
+// 切到登录屏并复位登录态；每次进入都用已存账密（"记住密码"）填充空框
+async function showLogin() {
   $('login-screen').hidden = false;
   $('main-screen').hidden = true;
   // 复位登录态：首次登录成功后 disabled 残留 true，tip 残留"登录成功"
   $('login-btn').disabled = false;
   setTip('');
+  // 加载已存账密：token 过期、登出、need-login 等回到登录页都会触发
+  try {
+    const stored = await invoke('load_stored_cred');
+    if (stored && stored.account) {
+      // 仅填充空框，避免覆盖用户正在输入的新账号/密码
+      if (!$('login-account').value) $('login-account').value = stored.account;
+      if (!$('login-password').value) $('login-password').value = stored.password;
+      $('login-remember').checked = true;
+    }
+  } catch (e) {}
 }
 
 function showMain(creds) {
