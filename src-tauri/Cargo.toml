@@ -1,6 +1,6 @@
 [package]
 name = "itsm-manager"
-version = "0.1.1"
+version = "0.1.2"
 description = "ITSM 工单管理工具"
 edition = "2021"
 

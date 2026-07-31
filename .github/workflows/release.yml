@@ -1,0 +1,60 @@
+# 推送 v* tag 时，在 Windows 上构建 Tauri 应用并发布 GitHub Release。
+#
+# 约定：tag 格式 v<x.y.z>（如 v0.1.1），且 <x.y.z> 必须同时等于：
+#   - src-tauri/Cargo.toml 的 [package].version
+#   - package.json 的 version
+#   - src-tauri/tauri.conf.json 的 version
+# 校验在「校验 tag 与代码版本一致」步骤执行，不一致则构建失败（防止误发）。
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 稳定工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts
+
+      - name: 缓存 Cargo 产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 校验 tag 与代码版本一致
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO_VER=$(grep -m1 '^version' src-tauri/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          PKG_VER=$(node -p "require('./package.json').version")
+          TAURI_VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "tag(去v)=$TAG | Cargo.toml=$CARGO_VER | package.json=$PKG_VER | tauri.conf.json=$TAURI_VER"
+          if [ "$TAG" != "$CARGO_VER" ] || [ "$TAG" != "$PKG_VER" ] || [ "$TAG" != "$TAURI_VER" ]; then
+            echo "::error::版本不一致：tag(去 v 前缀) 必须等于三处版本号。请同步版本后再推 tag。"
+            exit 1
+          fi
+
+      - name: 构建 Tauri 应用并创建 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'ITSM Manager ${{ github.ref_name }}'
+          releaseDraft: false
+          prerelease: false
