@@ -17,7 +17,10 @@ let lastClaimTime = 0;                    // 上一轮自动接单时间戳（ms
 let allViews = [];
 let pageSize = 50;          // 当前视图页大小：50/100/200，切视图时从 config 读
 let currentPage = 1;        // 当前页码，从 1 开始
-let currentSearch = null;   // 搜索态（跨视图/刷新保持）；null 表无搜索条件
+let currentSearch = null;   // 搜索态（当前视图工作变量，随 applyView 切换）
+let currentFetchedAt = null;   // 当前列表数据时间戳（状态栏"X分钟前"）
+let currentIsSearch = false;   // 当前列表是否搜索结果
+let viewStates = new Map();    // seachType -> ViewState（per-view 内存快照）
 
 // 读取某视图持久化的 pageSize，未配置或非法回退 50
 async function getPageSizeFor(st) {
@@ -385,6 +388,15 @@ listen('login-captcha', () => {
 $('logout-btn').addEventListener('click', async () => {
   if (!confirm('确定登出？将清除本地缓存与登录凭证（用户设置会保留）。')) return;
   await invoke('clear_creds');
+  // 清前端 per-view 快照 + 工作变量，避免下个账号看到上个账号数据
+  viewStates.clear();
+  currentSearch = null;
+  currentTickets = [];
+  totalCount = 0;
+  selectedId = null;
+  currentPage = 1;
+  currentFetchedAt = null;
+  currentIsSearch = false;
   showLogin();
 });
 
@@ -466,17 +478,57 @@ async function loadViews() {
   }
 }
 
-// 切视图：读 per-view pageSize，回第 1 页，上报后端
+// 工作变量 + 当前表单 DOM → 当前视图快照
+function saveCurrentView() {
+  viewStates.set(currentSeachType, {
+    seachType: currentSeachType,
+    search: currentSearch,
+    form: collectForm(),
+    currentPage,
+    tickets: currentTickets,
+    totalCount,
+    selectedId,
+    fetchedAt: currentFetchedAt,
+    isSearch: currentIsSearch,
+  });
+}
+
+// 快照 → 工作变量 + 回填表单 + 渲染列表/状态栏 + 详情面板
+// 关键：必须同步 currentSearch 工作变量，tickets-updated 守卫(if (currentSearch) return) 依赖它
+function applyView(state) {
+  currentSearch = state.search;
+  currentPage = state.currentPage;
+  currentTickets = state.tickets;
+  totalCount = state.totalCount;
+  selectedId = state.selectedId;
+  currentFetchedAt = state.fetchedAt;
+  currentIsSearch = state.isSearch;
+  applyForm(state.form);
+  renderTable();
+  renderListStatus();
+  // 详情面板：选中行在当前列表则静默重载，否则恢复空态
+  const t = selectedId ? currentTickets.find(x => x.incidentId === selectedId) : null;
+  if (t) loadDetail(t);
+  else $('detail-pane').innerHTML = '<div class="detail-empty">点击左侧工单查看详情</div>';
+}
+
+// 切视图：存当前视图状态 → 取目标视图快照（命中秒切，未命中首次加载）
 async function switchView(v, el) {
+  saveCurrentView();
   currentSeachType = v.seachType;
   currentViewName = v.viewName;
   document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
   el.classList.add('active');
-  selectedId = null;
-  currentPage = 1;
   pageSize = await getPageSizeFor(currentSeachType);
-  await invoke('set_current_page', { seachType: currentSeachType, pageIndex: 1 });
-  loadTickets();
+  const st = viewStates.get(currentSeachType);
+  if (st) {
+    applyView(st);   // 命中：秒切恢复（页码/搜索/列表/选中）
+  } else {
+    applyView(initEmptyState(currentSeachType));  // 首次：默认空态
+    loadTickets();                                  // 后拉取，成功后 saveCurrentView
+  }
+  // 上报当前页码（scheduler 据此刷对应页）；applyView 已设 currentPage 工作变量
+  await invoke('set_current_page', { seachType: currentSeachType, pageIndex: currentPage });
 }
 
 // 工单列表（真分页：按 currentPage/pageSize 向后端要对应页）
@@ -485,6 +537,8 @@ async function loadTickets(silent = false) {
     const res = await invoke('list_tickets_cached', { seachType: currentSeachType, pageIndex: currentPage, pageSize, search: currentSearch });
     currentTickets = res.data || [];
     totalCount = res.count ?? currentTickets.length;
+    currentIsSearch = res.search === true;
+    currentFetchedAt = res.fetched_at ?? null;
     // 越界回退：当前页空但总数>0（末尾删空），clamp 到有效末页重拉一次
     if (currentPage > 1 && currentTickets.length === 0 && totalCount > 0) {
       currentPage = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -492,11 +546,10 @@ async function loadTickets(silent = false) {
       return loadTickets(silent);
     }
     renderTable();
-    const isSearch = res.search === true;
-    const ageLabel = isSearch ? '搜索结果' : (res.from_cache ? `缓存 · ${ageText(res.fetched_at)}` : '实时');
-    $('list-status').textContent = `${currentViewName}：共 ${totalCount} 条 · 第 ${currentPage}/${totalPages()} 页 · ${ageLabel} · ${new Date().toLocaleTimeString()}`;
+    renderListStatus();
+    saveCurrentView();   // 成功才落快照（失败保留旧快照）
     // 搜索态不触发 scheduler 后台刷新（scheduler 只刷默认列表，与搜索解耦）
-    if (!silent && !isSearch) {
+    if (!silent && !currentIsSearch) {
       invoke('trigger_refresh', { seachType: currentSeachType });
     }
   } catch (e) {
@@ -504,6 +557,43 @@ async function loadTickets(silent = false) {
     toast('加载失败: ' + e, 'error');
     $('list-status').textContent = '加载失败: ' + e;
   }
+}
+
+// ============ per-view 状态快照 ============
+
+// 新视图默认空态（首次进入，拉取前用）
+function initEmptyState(st) {
+  return {
+    seachType: st,
+    search: null,
+    form: { kw: '', status: '', dateBegin: '', dateEnd: '', cg: '' },
+    currentPage: 1,
+    tickets: [],
+    totalCount: 0,
+    selectedId: null,
+    fetchedAt: null,
+    isSearch: false,
+  };
+}
+
+// 读搜索条 5 个控件当前值 → form 对象（saveCurrentView 落快照用）
+function collectForm() {
+  return {
+    kw: $('s-kw').value,
+    status: $('s-status').value,
+    dateBegin: $('s-date-begin').value,
+    dateEnd: $('s-date-end').value,
+    cg: $('s-cg').value,
+  };
+}
+
+// form 对象 → 回填 5 个控件（applyView 切回视图用）
+function applyForm(form) {
+  $('s-kw').value = form.kw || '';
+  $('s-status').value = form.status || '';
+  $('s-date-begin').value = form.dateBegin || '';
+  $('s-date-end').value = form.dateEnd || '';
+  $('s-cg').value = form.cg || '';
 }
 
 // ============ 列表搜索 ============
@@ -563,6 +653,13 @@ function initSearchUI() {
   $('s-kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('s-cg').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
   $('s-status').addEventListener('change', doSearch);
+}
+
+// 状态栏统一渲染：搜索态显示"搜索结果"，否则显示"缓存 · X分钟前"
+function renderListStatus() {
+  const ageLabel = currentIsSearch ? '搜索结果'
+    : (currentFetchedAt ? `缓存 · ${ageText(currentFetchedAt)}` : '-');
+  $('list-status').textContent = `${currentViewName}：共 ${totalCount} 条 · 第 ${currentPage}/${totalPages()} 页 · ${ageLabel} · ${new Date().toLocaleTimeString()}`;
 }
 
 function totalPages() {
@@ -1278,12 +1375,16 @@ listen('tickets-updated', (ev) => {
   if (p.seachType === currentSeachType && p.page_index === currentPage && p.page_size === pageSize) {
     currentTickets = p.data || [];
     totalCount = p.count ?? currentTickets.length;
+    currentFetchedAt = p.fetched_at ?? null;
+    currentIsSearch = false;
     renderTable();
-    $('list-status').textContent = `${currentViewName}：共 ${totalCount} 条 · 第 ${currentPage}/${totalPages()} 页 · ${ageText(p.fetched_at)} · ${new Date().toLocaleTimeString()}`;
+    renderListStatus();
+    saveCurrentView();
   } else if (p.seachType === currentSeachType) {
-    // 同视图非当前页：仅更新 count + 状态栏
+    // 同视图非当前页：仅更新 count + 状态栏 + 落快照
     totalCount = p.count ?? totalCount;
-    $('list-status').textContent = `${currentViewName}：共 ${totalCount} 条 · 第 ${currentPage}/${totalPages()} 页 · ${ageText(p.fetched_at)} · ${new Date().toLocaleTimeString()}`;
+    renderListStatus();
+    saveCurrentView();
   }
   // 更新对应视图 tab 的 count
   document.querySelectorAll('.view-tab').forEach(tab => {
