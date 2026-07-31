@@ -246,8 +246,9 @@ pub fn run() {
                 let token = app_state.token.clone();
                 let client = app_state.client.clone();
                 let port = cfg.mcp_port;
+                let default_seach_type = cfg.mcp_default_seach_type;
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = mcp::serve(token, client, port).await {
+                    if let Err(error) = mcp::serve(token, client, port, default_seach_type).await {
                         eprintln!("[mcp] {error}；MCP 不可用，主界面继续运行");
                     }
                 });

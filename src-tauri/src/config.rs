@@ -9,6 +9,7 @@ const MIN_INTERVAL: u64 = 30;
 const MAX_INTERVAL: u64 = 1800;
 const DEFAULT_INTERVAL: u64 = 300;
 const DEFAULT_MCP_PORT: u16 = 17540;
+const DEFAULT_MCP_SEACH_TYPE: i64 = 7;
 
 /// 默认分页大小；view_page_sizes 未覆盖的视图用此值
 pub const DEFAULT_PAGE_SIZE: i64 = 50;
@@ -62,11 +63,16 @@ pub struct Config {
     /// 本机 MCP server 端口，合法范围 1024..=65535。
     #[serde(default = "default_mcp_port")]
     pub mcp_port: u16,
+    /// 本机 MCP search / get_ticket_by_code 未指定视图时的缺省 seachType。默认 7（"所有的工单"）。
+    /// 配置变化需重启应用生效。
+    #[serde(default = "default_mcp_seach_type")]
+    pub mcp_default_seach_type: i64,
 }
 
 fn default_true() -> bool { true }
 fn default_last_interval() -> u64 { DEFAULT_INTERVAL }
 fn default_mcp_port() -> u16 { DEFAULT_MCP_PORT }
+fn default_mcp_seach_type() -> i64 { DEFAULT_MCP_SEACH_TYPE }
 
 impl Config {
     pub fn default_with(seach_type: i64) -> Self {
@@ -89,6 +95,7 @@ impl Config {
             auto_claim_seach_type: None,
             mcp_enabled: true,
             mcp_port: DEFAULT_MCP_PORT,
+            mcp_default_seach_type: DEFAULT_MCP_SEACH_TYPE,
         }
     }
 
@@ -109,6 +116,11 @@ impl Config {
         if port >= 1024 { port } else { DEFAULT_MCP_PORT }
     }
 
+    /// 缺省视图号须为正整数；非法值回退默认 7
+    pub fn clamp_mcp_seach_type(seach_type: i64) -> i64 {
+        if seach_type >= 1 { seach_type } else { DEFAULT_MCP_SEACH_TYPE }
+    }
+
     pub fn clamp_detail_width(pct: Option<f64>) -> Option<f64> {
         pct.map(|p| p.clamp(20.0, 70.0))
     }
@@ -125,6 +137,7 @@ impl Config {
             detail_width_pct: Self::clamp_detail_width(self.detail_width_pct),
             last_interval_sec: Self::clamp_interval(self.last_interval_sec).max(MIN_INTERVAL),
             mcp_port: Self::clamp_mcp_port(self.mcp_port),
+            mcp_default_seach_type: Self::clamp_mcp_seach_type(self.mcp_default_seach_type),
             ..self
         }.dedup()
     }
@@ -195,20 +208,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540 }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7 }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540 }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7 }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540 };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7 };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -258,7 +271,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 300,
             auto_claim_enabled: false, auto_claim_seach_type: None,
-            mcp_enabled: true, mcp_port: 17540,
+            mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
         }.normalize();
         assert_eq!(c.detail_width_pct, Some(20.0));
     }
@@ -286,7 +299,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 0,
             auto_claim_enabled: false, auto_claim_seach_type: None,
-            mcp_enabled: true, mcp_port: 17540,
+            mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
         };
         assert_eq!(base().normalize().last_interval_sec, 30, "0 -> 最小 30");
         let mut c = base(); c.last_interval_sec = 5;
@@ -306,7 +319,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 120,
             auto_claim_enabled: false, auto_claim_seach_type: None,
-            mcp_enabled: true, mcp_port: 17540,
+            mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
         };
         c = c.normalize();
         assert_eq!(c.interval_sec, 0, "interval 0 = 暂停，保留");
@@ -324,7 +337,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 300,
             auto_claim_enabled: false, auto_claim_seach_type: None,
-            mcp_enabled: true, mcp_port: 17540,
+            mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
         };
         // 暂停：记 last=300，interval->0
         c = c.toggled_pause();
@@ -405,5 +418,38 @@ mod tests {
         let n = c.normalize();
         assert!(!n.mcp_enabled);
         assert_eq!(n.mcp_port, 17540);
+    }
+
+    #[test]
+    fn clamp_mcp_seach_type_accepts_positive() {
+        assert_eq!(Config::clamp_mcp_seach_type(1), 1);
+        assert_eq!(Config::clamp_mcp_seach_type(7), 7);
+        assert_eq!(Config::clamp_mcp_seach_type(99), 99);
+    }
+
+    #[test]
+    fn clamp_mcp_seach_type_rejects_non_positive() {
+        assert_eq!(Config::clamp_mcp_seach_type(0), 7);
+        assert_eq!(Config::clamp_mcp_seach_type(-3), 7);
+    }
+
+    #[test]
+    fn default_with_sets_mcp_default_seach_type() {
+        let c = Config::default_with(2);
+        assert_eq!(c.mcp_default_seach_type, 7);
+    }
+
+    #[test]
+    fn legacy_config_defaults_mcp_seach_type() {
+        let legacy = r#"{"whitelist":[2],"interval_sec":300}"#;
+        let c: Config = serde_json::from_str(legacy).unwrap();
+        assert_eq!(c.mcp_default_seach_type, 7);
+    }
+
+    #[test]
+    fn normalize_repairs_invalid_mcp_seach_type() {
+        let mut c = Config::default_with(2);
+        c.mcp_default_seach_type = 0;
+        assert_eq!(c.normalize().mcp_default_seach_type, 7);
     }
 }

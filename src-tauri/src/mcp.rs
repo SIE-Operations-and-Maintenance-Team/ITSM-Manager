@@ -1,4 +1,4 @@
-// MCP 边界层：对外暴露 8 个工单 tools（4 只读 + 4 写），复用 api.rs HTTP 实现，不含新 ITSM endpoint
+// MCP 边界层：对外暴露 10 个工单 tools（6 只读 + 4 写），复用 api.rs HTTP 实现，不含新 ITSM endpoint
 use crate::api::{self, FetchError, SearchParams, AUTH_EXPIRED_ERR};
 use crate::state::TokenStore;
 use rmcp::{
@@ -14,11 +14,12 @@ use serde_json::{json, Value};
 pub struct ItsmHandler {
     token: TokenStore,
     client: reqwest::Client,
+    default_seach_type: i64,
 }
 
 impl ItsmHandler {
-    pub fn new(token: TokenStore, client: reqwest::Client) -> Self {
-        Self { token, client }
+    pub fn new(token: TokenStore, client: reqwest::Client, default_seach_type: i64) -> Self {
+        Self { token, client, default_seach_type }
     }
 
     fn token(&self) -> Result<String, McpError> {
@@ -30,8 +31,8 @@ impl ItsmHandler {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SearchByCodeParams {
-    #[schemars(description = "视图 seachType；先调用 list_views 获取")]
-    seach_type: i64,
+    #[schemars(description = "视图 seachType；省略时用设置中的 MCP 缺省视图（默认 7=所有工单）。可先调用 list_views 获取")]
+    seach_type: Option<i64>,
     #[schemars(description = "工单号或主题关键字；按 codeAndSubject 模糊匹配")]
     keyword: String,
     #[schemars(description = "页码，从 1 开始；省略时为 1")]
@@ -42,8 +43,8 @@ struct SearchByCodeParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SearchByCustomerGroupParams {
-    #[schemars(description = "视图 seachType；先调用 list_views 获取")]
-    seach_type: i64,
+    #[schemars(description = "视图 seachType；省略时用设置中的 MCP 缺省视图（默认 7=所有工单）")]
+    seach_type: Option<i64>,
     #[schemars(description = "客户组名称关键字；按 contactCustomerGroupName 模糊匹配")]
     keyword: String,
     #[schemars(description = "页码，从 1 开始；省略时为 1")]
@@ -59,15 +60,29 @@ struct GetDetailParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListRepliesParams {
+    #[schemars(description = "工单 incidentId")]
+    incident_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GetTicketByCodeParams {
+    #[schemars(description = "工单展示单号 incidentCode，如 IM26070065")]
+    code: String,
+    #[schemars(description = "视图 seachType；省略时用设置中的 MCP 缺省视图")]
+    seach_type: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ReplyParams {
     #[schemars(description = "工单 incidentId")]
     order_id: String,
-    #[schemars(description = "回复内容；可传纯文本或 ITSM 可接受的 HTML")]
+    #[schemars(description = "回复内容。建议用 HTML 格式以保留排版：换行用 <br>，段落用 <p>，重点用 <strong>，列表用 <ul>/<li>，表格用 <table>；避免依赖纯文本换行")]
     detail: String,
     #[schemars(description = "true 表示内部备注，false 表示公开回复")]
     is_private: bool,
-    #[schemars(description = "ITSM 工单类型；现有前端默认传字符串 1")]
-    order_type: String,
+    #[schemars(description = "ITSM 工单类型；默认 \"1\"（与工单 orderType 字段一致）。其他取值需向业务确认")]
+    order_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -105,6 +120,34 @@ fn fetch_error(error: FetchError) -> McpError {
 
 fn json_result(value: Value) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(value.to_string())])
+}
+
+/// get_detail 返回精简：从 get-with-fields 的 data 中只保留 agent 常用核心字段，
+/// 丢弃四套 *Fields 表单模板与 extField1-35。
+/// 注意：写操作（resolve/change_status）依赖完整 data 拼 update body，故裁剪只发生在
+/// 此 MCP 输出层，api.rs 不得改动。
+fn pick_detail_fields(v: &Value) -> Value {
+    const KEEP: &[&str] = &[
+        "incidentId", "incidentCode", "orderSubject", "detail", "status", "statusName",
+        "priority", "priorityName", "effect", "effectName", "urgency",
+        "supportBy", "supportName", "requestor", "requestorName", "assign", "assignName",
+        "serviceFullName", "serviceTypeName", "serviceSubTypeName",
+        "incidentType", "incidentTypeName", "incidentSource", "incidentSourceName",
+        "contactCustomerGroup", "contactCustomerGroupName",
+        "creationDate", "lastUpdateDate", "firstResponseTime", "hopeResolvedTime",
+        "resolvedTime", "closeTime", "solution", "orderType", "tenantId", "phone", "email",
+    ];
+    let obj = match v.get("data").and_then(|d| d.as_object()) {
+        Some(o) => o,
+        None => return json!({}),
+    };
+    let mut m = serde_json::Map::new();
+    for &k in KEEP {
+        if let Some(val) = obj.get(k) {
+            m.insert(k.to_string(), val.clone());
+        }
+    }
+    Value::Object(m)
 }
 
 fn required_text(field: &str, value: String) -> Result<String, McpError> {
@@ -162,6 +205,7 @@ impl ItsmHandler {
         let token = self.token()?;
         let keyword = required_text("keyword", params.keyword)?;
         let (page_index, page_size) = pagination(params.page_index, params.page_size)?;
+        let seach_type = params.seach_type.unwrap_or(self.default_seach_type);
         let search = SearchParams {
             code_and_subject: Some(keyword),
             ..Default::default()
@@ -169,7 +213,7 @@ impl ItsmHandler {
         let (data, count) = api::fetch_tickets_raw(
             &self.client,
             &token,
-            params.seach_type,
+            seach_type,
             page_index,
             page_size,
             Some(&search),
@@ -179,6 +223,7 @@ impl ItsmHandler {
         Ok(json_result(json!({
             "data": data,
             "count": count,
+            "seach_type": seach_type,
             "page_index": page_index,
             "page_size": page_size,
         })))
@@ -200,6 +245,7 @@ impl ItsmHandler {
         let token = self.token()?;
         let keyword = required_text("keyword", params.keyword)?;
         let (page_index, page_size) = pagination(params.page_index, params.page_size)?;
+        let seach_type = params.seach_type.unwrap_or(self.default_seach_type);
         let search = SearchParams {
             contact_customer_group_name: Some(keyword),
             ..Default::default()
@@ -207,7 +253,7 @@ impl ItsmHandler {
         let (data, count) = api::fetch_tickets_raw(
             &self.client,
             &token,
-            params.seach_type,
+            seach_type,
             page_index,
             page_size,
             Some(&search),
@@ -217,13 +263,14 @@ impl ItsmHandler {
         Ok(json_result(json!({
             "data": data,
             "count": count,
+            "seach_type": seach_type,
             "page_index": page_index,
             "page_size": page_size,
         })))
     }
 
     #[tool(
-        description = "按 incidentId 读取工单详情和动态字段；参数 id 必须是 incidentId，不是展示单号。",
+        description = "按 incidentId 读取工单核心详情（精简字段，不含表单模板）。参数 id 必须是 incidentId，不是展示单号；展示单号请用 get_ticket_by_code。",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -240,11 +287,104 @@ impl ItsmHandler {
         let value = api::get_detail(&self.client, &token, &id)
             .await
             .map_err(api_error)?;
-        Ok(json_result(value))
+        Ok(json_result(pick_detail_fields(&value)))
     }
 
     #[tool(
-        description = "回复工单。首版不上传附件，fileIds 固定为空；本操作会修改真实 ITSM 工单。",
+        description = "按 incidentId 列出工单的历史回复轨迹（含回复人、时间、内容、是否内部备注）。",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn list_replies(
+        &self,
+        Parameters(params): Parameters<ListRepliesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let incident_id = required_text("incident_id", params.incident_id)?;
+        let value = api::list_replies(&self.client, &token, &incident_id)
+            .await
+            .map_err(api_error)?;
+        let replies = value.get("data").cloned().unwrap_or(Value::Array(vec![]));
+        let count = replies.as_array().map(|a| a.len()).unwrap_or(0);
+        Ok(json_result(json!({ "replies": replies, "count": count })))
+    }
+
+    #[tool(
+        description = "按展示单号(incidentCode，如 IM26070065)一步返回工单核心详情与历史回复。内部：缺省视图搜 code → incidentId → 并发取详情与回复。命中多条时取首条并附 hint。",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn get_ticket_by_code(
+        &self,
+        Parameters(params): Parameters<GetTicketByCodeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let code = required_text("code", params.code)?;
+        let seach_type = params.seach_type.unwrap_or(self.default_seach_type);
+        let search = SearchParams {
+            code_and_subject: Some(code.clone()),
+            ..Default::default()
+        };
+        let (data, count) = api::fetch_tickets_raw(
+            &self.client,
+            &token,
+            seach_type,
+            1,
+            1,
+            Some(&search),
+        )
+        .await
+        .map_err(fetch_error)?;
+        let arr = data.as_array().ok_or_else(|| api_error("搜索响应非数组"))?;
+        if arr.is_empty() {
+            return Err(McpError::invalid_params(
+                format!("未找到单号为 {code} 的工单"),
+                None,
+            ));
+        }
+        let first = &arr[0];
+        let incident_id = first
+            .get("incidentId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| api_error("搜索结果缺 incidentId"))?
+            .to_string();
+        let incident_code = first.get("incidentCode").cloned().unwrap_or(Value::Null);
+        // 并发取详情与回复（reqwest::Client 支持同一 client 并发请求）
+        let (detail_res, replies_res) = tokio::join!(
+            api::get_detail(&self.client, &token, &incident_id),
+            api::list_replies(&self.client, &token, &incident_id),
+        );
+        let detail = pick_detail_fields(&detail_res.map_err(api_error)?);
+        let replies = replies_res
+            .map_err(api_error)?
+            .get("data")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+        let mut result = serde_json::Map::new();
+        result.insert("count".into(), json!(count));
+        result.insert("incident_id".into(), json!(incident_id));
+        result.insert("incident_code".into(), incident_code);
+        result.insert("detail".into(), detail);
+        result.insert("replies".into(), replies);
+        if count > 1 {
+            result.insert(
+                "hint".into(),
+                Value::String(format!("命中 {count} 条，已取首条；如非目标请用更完整的单号")),
+            );
+        }
+        Ok(json_result(Value::Object(result)))
+    }
+
+    #[tool(
+        description = "回复工单。本工具只追加回复，不改工单状态；如需变更状态请用 resolve / unhang 等。首版不上传附件，fileIds 固定为空；本操作会修改真实 ITSM 工单。",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -259,7 +399,10 @@ impl ItsmHandler {
         let token = self.token()?;
         let order_id = required_text("order_id", params.order_id)?;
         let detail = required_text("detail", params.detail)?;
-        let order_type = required_text("order_type", params.order_type)?;
+        let order_type = match params.order_type {
+            Some(s) => required_text("order_type", s)?,
+            None => "1".to_string(),
+        };
         let value = api::reply(
             &self.client,
             &token,
@@ -344,26 +487,31 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 
-fn build_router(token: TokenStore, client: reqwest::Client) -> axum::Router {
+fn build_router(token: TokenStore, client: reqwest::Client, default_seach_type: i64) -> axum::Router {
     let config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
         .with_json_response(true)
         .with_sse_keep_alive(None);
     let service: StreamableHttpService<ItsmHandler, LocalSessionManager> =
         StreamableHttpService::new(
-            move || Ok(ItsmHandler::new(token.clone(), client.clone())),
+            move || Ok(ItsmHandler::new(token.clone(), client.clone(), default_seach_type)),
             Default::default(),
             config,
         );
     axum::Router::new().nest_service("/mcp", service)
 }
 
-pub async fn serve(token: TokenStore, client: reqwest::Client, port: u16) -> Result<(), String> {
+pub async fn serve(
+    token: TokenStore,
+    client: reqwest::Client,
+    port: u16,
+    default_seach_type: i64,
+) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| format!("绑定 127.0.0.1:{port} 失败: {error}"))?;
     println!("[mcp] listening on http://127.0.0.1:{port}/mcp");
-    axum::serve(listener, build_router(token, client))
+    axum::serve(listener, build_router(token, client, default_seach_type))
         .await
         .map_err(|error| format!("MCP server 退出: {error}"))
 }
@@ -373,17 +521,20 @@ mod tests {
     use super::*;
 
     fn handler() -> ItsmHandler {
-        ItsmHandler::new(TokenStore::default(), reqwest::Client::new())
+        ItsmHandler::new(TokenStore::default(), reqwest::Client::new(), 7)
     }
 
     #[test]
-    fn exposes_exactly_eight_tools() {
+    fn exposes_exactly_ten_tools() {
         let tools = ItsmHandler::tool_router().list_all();
-        let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        let mut names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        names.sort();
         assert_eq!(
             names,
             vec![
                 "get_detail",
+                "get_ticket_by_code",
+                "list_replies",
                 "list_views",
                 "reply",
                 "resolve",
@@ -438,7 +589,30 @@ mod tests {
                 order_id: "OID".into(),
                 detail: "test".into(),
                 is_private: false,
-                order_type: "1".into(),
+                order_type: Some("1".into()),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.message, "未登录");
+    }
+
+    #[tokio::test]
+    async fn list_replies_without_login_returns_mcp_error() {
+        let err = handler()
+            .list_replies(Parameters(ListRepliesParams {
+                incident_id: "X".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.message, "未登录");
+    }
+
+    #[tokio::test]
+    async fn get_ticket_by_code_without_login_stops_before_network() {
+        let err = handler()
+            .get_ticket_by_code(Parameters(GetTicketByCodeParams {
+                code: "IM1".into(),
+                seach_type: None,
             }))
             .await
             .unwrap_err();
@@ -448,7 +622,7 @@ mod tests {
     async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let router = build_router(TokenStore::default(), reqwest::Client::new());
+        let router = build_router(TokenStore::default(), reqwest::Client::new(), 7);
         let task = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
@@ -483,7 +657,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streamable_http_initializes_and_lists_eight_tools() {
+    async fn streamable_http_initializes_and_lists_ten_tools() {
         let (url, task) = spawn_test_server().await;
         let client = reqwest::Client::new();
 
@@ -518,7 +692,7 @@ mod tests {
         )
         .await;
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 10);
         assert!(tools.iter().any(|tool| tool["name"] == "list_views"));
         assert!(tools.iter().any(|tool| tool["name"] == "resolve"));
 
