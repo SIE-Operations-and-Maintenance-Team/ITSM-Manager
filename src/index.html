@@ -94,6 +94,7 @@
         <button type="button" data-tab="auto">自动化</button>
         <button type="button" data-tab="mcp">MCP</button>
         <button type="button" data-tab="budan">补单默认值</button>
+        <button type="button" data-tab="about">关于</button>
       </nav>
       <div class="settings-body">
         <section class="active" data-pane="general">
@@ -168,6 +169,16 @@
               <span>默认支持组（补单 assign 必填）</span>
               <select id="settings-sg-select"><option value="">请选择</option></select>
             </label>
+          </div>
+        </section>
+        <section data-pane="about">
+          <div class="set-group">
+            <h5>关于</h5>
+            <div class="about-row"><span class="about-k">应用</span><span>ITSM 管理工具</span></div>
+            <div class="about-row"><span class="about-k">当前版本</span><span id="about-version">-</span></div>
+            <div class="set-desc">
+              如需检查更新，前往 <a href="#" id="about-releases-link" class="about-link">项目 Release 页</a> 查看。
+            </div>
           </div>
         </section>
       </div>

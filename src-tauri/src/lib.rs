@@ -306,6 +306,8 @@ pub fn run() {
             commands::set_autostart,
             commands::upload_attachment,
             commands::save_detail_width,
+            commands::get_app_version,
+            commands::open_external_url,
             open_login,
             login_auto,
             commands::save_stored_cred,

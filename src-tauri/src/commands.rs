@@ -355,3 +355,34 @@ pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
 pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
     apply_autostart(&app, enabled)
 }
+
+// ============================ 关于 ============================
+
+/// 当前应用版本号（编译期注入，与 Cargo.toml / package.json / tauri.conf.json 一致）
+#[tauri::command]
+pub fn get_app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// 打开外部 http/https 链接（系统默认浏览器）。
+/// 项目 bundle 仅 nsis（Windows），用 cmd start；非 Windows 返回错误。
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("仅支持 http/https 链接".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // start 第一段空串占位窗口标题，避免带引号的 URL 被当作标题
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| format!("打开链接失败：{}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = url;
+        Err("当前平台不支持打开外链".into())
+    }
+}

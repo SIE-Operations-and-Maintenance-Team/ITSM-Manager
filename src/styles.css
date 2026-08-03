@@ -241,3 +241,9 @@ dialog .rich-editor { margin-top: 4px; }
   margin: 0;
   font-size: 13px;
 }
+
+/* ============ 设置-关于 ============ */
+.about-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 13px; }
+.about-k { color: var(--muted); width: 64px; flex: none; }
+.about-link { color: var(--primary); text-decoration: none; }
+.about-link:hover { text-decoration: underline; }

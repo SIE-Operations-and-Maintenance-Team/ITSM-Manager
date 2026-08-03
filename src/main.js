@@ -559,6 +559,17 @@ async function loadTickets(silent = false) {
   }
 }
 
+// 写操作成功后刷新列表：
+//   1) invalidate_after_write：失效默认列表缓存 + 后台拉默认列表 + restart loop 刷其他视图
+//   2) 搜索态下，tickets-updated 监听器会忽略后台默认列表刷新（防覆盖搜索结果），
+//      故再按 currentSearch 显式重拉一次，让搜索结果同步反映写操作变化
+async function refreshAfterWrite(seachType) {
+  await invoke('invalidate_after_write', { seachType });
+  if (currentSearch && seachType === currentSeachType) {
+    await loadTickets(false);
+  }
+}
+
 // ============ per-view 状态快照 ============
 
 // 新视图默认空态（首次进入，拉取前用）
@@ -897,7 +908,7 @@ async function doClaimAll() {
     else toast('接单异常: ' + e, 'error');
   } finally {
     claimingLock = false;
-    await invoke('invalidate_after_write', { seachType: currentSeachType });
+    await refreshAfterWrite(currentSeachType);
   }
 }
 
@@ -907,7 +918,7 @@ async function doClaim(t) {
     const res = await claimOne(t.incidentId);
     if (res.ok) {
       toast('接单成功', 'success');
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
       loadDetail({ ...t, status: 'Processing' });
     } else toast('接单失败: ' + res.msg, 'error');
   } catch (e) {
@@ -929,7 +940,7 @@ $('reply-submit').addEventListener('click', async () => {
     if (r.code === 800) {
       toast('回复成功', 'success');
       $('reply-dialog').close();
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
       loadDetail(t);
     } else toast('回复失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('回复失败: ' + e, 'error'); }
@@ -947,7 +958,7 @@ $('resolve-submit').addEventListener('click', async () => {
     if (r.code === 800) {
       toast('解决成功', 'success');
       $('resolve-dialog').close();
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
     } else toast('解决失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('解决失败: ' + e, 'error'); }
 });
@@ -962,7 +973,7 @@ $('suspend-submit').addEventListener('click', async () => {
     if (r.code === 800) {
       toast('暂挂成功', 'success');
       $('suspend-dialog').close();
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
     } else toast('暂挂失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('暂挂失败: ' + e, 'error'); }
 });
@@ -1188,7 +1199,7 @@ $('budan-submit').addEventListener('click', async () => {
       }
       toast('补单成功：' + label, 'success');
       $('budan-dialog').close();
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
     } else toast('补单失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('补单失败: ' + e, 'error'); }
 });
@@ -1273,7 +1284,7 @@ $('reassign-submit').addEventListener('click', async () => {
     if (r.code === 800) {
       toast('转派成功', 'success');
       $('reassign-dialog').close();
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
       loadDetail(t);
     } else toast('转派失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('转派失败: ' + e, 'error'); }
@@ -1295,7 +1306,7 @@ $('cancel-submit').addEventListener('click', async () => {
     if (r.code === 800) {
       toast('已取消', 'success');
       $('cancel-dialog').close();
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
     } else toast('取消失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('取消失败: ' + e, 'error'); }
 });
@@ -1308,7 +1319,7 @@ async function doClose(t) {
     const r = await invoke('close_incident', { id: t.incidentId });
     if (r.code === 800) {
       toast('已关闭', 'success');
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
     } else toast('关闭失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('关闭失败: ' + e, 'error'); }
 }
@@ -1319,7 +1330,7 @@ async function doUnhang(t) {
     const r = await invoke('unhang', { id: t.incidentId });
     if (r.code === 800) {
       toast('已解挂', 'success');
-      await invoke('invalidate_after_write', { seachType: currentSeachType });
+      await refreshAfterWrite(currentSeachType);
       loadDetail(t);
     } else toast('解挂失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('解挂失败: ' + e, 'error'); }
@@ -1363,15 +1374,25 @@ async function runAutoClaim(data) {
     else toast('自动接单异常: ' + e, 'error');
   } finally {
     claimingLock = false;
-    await invoke('invalidate_after_write', { seachType: autoClaimSeachType });
+    await refreshAfterWrite(autoClaimSeachType);
   }
 }
 
 listen('tickets-updated', (ev) => {
   const p = ev.payload || {};
-  // 搜索态忽略后台默认列表刷新（scheduler 不带 search 条件，避免覆盖搜索结果）
+  // 视图 tab 角标 count：独立于搜索态，始终更新
+  document.querySelectorAll('.view-tab').forEach(tab => {
+    if (Number(tab.dataset.seachType) === p.seachType) {
+      const span = tab.querySelector('.count');
+      if (span) span.textContent = p.count ?? '';
+    }
+  });
+  // 自动接单：后台行为，独立于用户是否在搜索
+  // （claimingLock + 60s 同批 id + 接单后视图状态过滤致 data 空，三重防循环）
+  maybeRunAutoClaim(p);
+  // 搜索态：不替换列表（scheduler 不带 search 条件，避免覆盖搜索结果）
   if (currentSearch) return;
-  // 刷新的是当前视图 + 当前页 + 当前 pageSize 才替换列表
+  // 非搜索态：刷新的是当前视图 + 当前页 + 当前 pageSize 才替换列表
   if (p.seachType === currentSeachType && p.page_index === currentPage && p.page_size === pageSize) {
     currentTickets = p.data || [];
     totalCount = p.count ?? currentTickets.length;
@@ -1386,15 +1407,6 @@ listen('tickets-updated', (ev) => {
     renderListStatus();
     saveCurrentView();
   }
-  // 更新对应视图 tab 的 count
-  document.querySelectorAll('.view-tab').forEach(tab => {
-    if (Number(tab.dataset.seachType) === p.seachType) {
-      const span = tab.querySelector('.count');
-      if (span) span.textContent = p.count ?? '';
-    }
-  });
-  // 自动接单（异步触发，不阻塞列表刷新）
-  maybeRunAutoClaim(p);
 });
 
 listen('need-login', () => showLogin());
@@ -1460,6 +1472,8 @@ async function openSettings() {
     mdSel.appendChild(o);
   });
   mdSel.value = cfg.mcp_default_seach_type ?? '';
+  // 关于页：回填当前版本号
+  $('about-version').textContent = 'v' + await invoke('get_app_version');
   // 复位到常规 tab（HTML 虽带默认 active，但上次切到的 tab 会保留，再开需复位）
   switchSettingsTab('general');
   openDlg(dlg);
@@ -1476,6 +1490,15 @@ function switchSettingsTab(tab) {
 }
 document.querySelectorAll('#settings-dialog .settings-nav button').forEach(btn => {
   btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));
+});
+
+// ============ 关于 ============
+const ABOUT_REPO_RELEASES = 'https://github.com/SIE-Operations-and-Maintenance-Team/ITSM-Manager/releases';
+
+$('about-releases-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  invoke('open_external_url', { url: ABOUT_REPO_RELEASES })
+    .catch(e => toast('打开失败: ' + e, 'error'));
 });
 
 // 设置里的 autocomplete（点选只更新 settingsDefaults，确定时才落盘）
