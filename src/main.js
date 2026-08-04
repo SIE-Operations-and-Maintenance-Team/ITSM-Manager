@@ -12,6 +12,7 @@ let claimingLock = false;     // 批量/自动接单进行中标志，防并发
 const PENDING_CLAIM_VIEW = '待我接单';   // 目标视图 viewName，精确匹配
 let autoClaimEnabled = false;             // 内存缓存，config-changed 时刷新
 let autoClaimSeachType = null;            // 内存缓存，null 表示未配置
+let autoClaimNotify = true;               // 内存缓存：自动接单后弹 Windows 通知
 let lastClaimIds = [];                    // 上一轮自动接单的 incidentId 列表，死循环防护
 let lastClaimTime = 0;                    // 上一轮自动接单时间戳（ms）
 let allViews = [];
@@ -575,6 +576,7 @@ async function refreshAutoClaimConfig() {
     const cfg = await invoke('get_config', { seachType: currentSeachType });
     autoClaimEnabled = !!cfg.auto_claim_enabled;
     autoClaimSeachType = cfg.auto_claim_seach_type ?? null;
+    autoClaimNotify = cfg.auto_claim_notify ?? true;
   } catch (e) { /* 静默 */ }
 }
 
@@ -1512,16 +1514,36 @@ async function runAutoClaim(data) {
   lastClaimIds = ids;
   lastClaimTime = now;
   let ok = 0, fail = 0;
+  let lastOk = null;                       // 最后一条成功工单（ok===1 时取详情用）
   const failedIds = [];
   try {
     for (const t of data) {
       const res = await claimOne(t.incidentId);
-      if (res.ok) ok++; else { fail++; failedIds.push(t.incidentCode || t.incidentId); }
+      if (res.ok) { ok++; lastOk = t; } else { fail++; failedIds.push(t.incidentCode || t.incidentId); }
     }
     if (ok > 0) toast(`自动接单成功 ${ok} 条`, 'success');
     if (fail > 0) { toast(`自动接单失败 ${fail} 条`, 'error'); console.warn('自动接单失败单号', failedIds); }
+    // Windows 系统通知：单条带单号+标题（截断），多条给数量
+    if (autoClaimNotify) {
+      let title = '', body = '';
+      if (ok === 1 && lastOk) {
+        title = '自动接单成功';
+        const full = String(lastOk.orderSubject || '');
+        body = `${lastOk.incidentCode || lastOk.incidentId || ''} ${full.slice(0, 30)}${full.length > 30 ? '…' : ''}${fail > 0 ? `（另失败 ${fail} 条）` : ''}`;
+      } else if (ok >= 2) {
+        title = fail > 0 ? '自动接单完成' : '自动接单成功';
+        body = fail > 0 ? `成功 ${ok} 条，失败 ${fail} 条` : `已接 ${ok} 条`;
+      } else if (fail > 0) {
+        title = '自动接单失败';
+        body = `失败 ${fail} 条`;
+      }
+      if (title) invoke('send_system_notification', { title, body }).catch(() => {});
+    }
   } catch (e) {
-    if (isAuthExpired(e)) { showLogin(); toast(`自动接单中断（token 失效）：已接 ${ok} 条`, 'error'); }
+    if (isAuthExpired(e)) {
+      showLogin(); toast(`自动接单中断（token 失效）：已接 ${ok} 条`, 'error');
+      if (autoClaimNotify) invoke('send_system_notification', { title: '自动接单中断', body: `登录已失效，已接 ${ok} 条` }).catch(() => {});
+    }
     else toast('自动接单异常: ' + e, 'error');
   } finally {
     claimingLock = false;
@@ -1597,6 +1619,7 @@ async function openSettings() {
   $('settings-auto-login').checked = !!cfg.auto_login_enabled;
   $('settings-min-tray').checked = !!cfg.minimize_to_tray;
   $('settings-auto-claim').checked = !!cfg.auto_claim_enabled;
+  $('settings-auto-claim-notify').checked = cfg.auto_claim_notify ?? true;
   const acViewSel = $('settings-auto-claim-view');
   acViewSel.innerHTML = '<option value="">请选择</option>';
   allViews.forEach(v => {
@@ -1728,6 +1751,7 @@ $('settings-submit').addEventListener('click', async () => {
         minimize_to_tray: min_tray_new,
         auto_claim_enabled: $('settings-auto-claim').checked,
         auto_claim_seach_type: parseInt($('settings-auto-claim-view').value) || null,
+        auto_claim_notify: $('settings-auto-claim-notify').checked,
         mcp_enabled: mcp_enabled_new,
         mcp_port: mcp_port_new,
         mcp_default_seach_type: mcp_default_view_new,

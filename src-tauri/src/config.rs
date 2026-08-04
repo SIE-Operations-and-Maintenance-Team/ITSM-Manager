@@ -57,6 +57,9 @@ pub struct Config {
     /// 自动接单目标视图 seachType；首次启动由前端按 viewName='待我接单' 自动填。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_claim_seach_type: Option<i64>,
+    /// 自动接单后弹 Windows 系统通知。默认开（托盘/后台场景的结果反馈）。
+    #[serde(default = "default_true")]
+    pub auto_claim_notify: bool,
     /// 启用本机 MCP server。默认开；配置变化需重启应用生效。
     #[serde(default = "default_true")]
     pub mcp_enabled: bool,
@@ -96,6 +99,7 @@ impl Config {
             last_interval_sec: DEFAULT_INTERVAL,
             auto_claim_enabled: false,
             auto_claim_seach_type: None,
+            auto_claim_notify: true,
             mcp_enabled: true,
             mcp_port: DEFAULT_MCP_PORT,
             mcp_default_seach_type: DEFAULT_MCP_SEACH_TYPE,
@@ -212,20 +216,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -275,6 +279,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 300,
             auto_claim_enabled: false, auto_claim_seach_type: None,
+            auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
         }.normalize();
@@ -304,6 +309,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 0,
             auto_claim_enabled: false, auto_claim_seach_type: None,
+            auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
         };
@@ -325,6 +331,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 120,
             auto_claim_enabled: false, auto_claim_seach_type: None,
+            auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
         };
@@ -344,6 +351,7 @@ mod tests {
             autostart_enabled: false, minimize_to_tray: true,
             tray_hint_shown: false, last_interval_sec: 300,
             auto_claim_enabled: false, auto_claim_seach_type: None,
+            auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
         };
@@ -482,5 +490,29 @@ mod tests {
         let mut c2 = Config::default_with(2);
         c2.auto_login_enabled = false;
         assert!(!c2.normalize().auto_login_enabled);
+    }
+
+    #[test]
+    fn default_with_auto_claim_notify_on() {
+        let c = Config::default_with(2);
+        assert!(c.auto_claim_notify, "auto_claim_notify 默认开");
+    }
+
+    #[test]
+    fn legacy_config_defaults_auto_claim_notify() {
+        // 旧 config 缺 auto_claim_notify，serde 默认应补 true
+        let legacy = r#"{"whitelist":[2],"interval_sec":300}"#;
+        let c: Config = serde_json::from_str(legacy).unwrap();
+        assert!(c.auto_claim_notify);
+    }
+
+    #[test]
+    fn normalize_preserves_auto_claim_notify() {
+        let mut c = Config::default_with(2);
+        c.auto_claim_notify = true;
+        assert!(c.normalize().auto_claim_notify);
+        let mut c2 = Config::default_with(2);
+        c2.auto_claim_notify = false;
+        assert!(!c2.normalize().auto_claim_notify);
     }
 }
