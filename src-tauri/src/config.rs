@@ -67,6 +67,9 @@ pub struct Config {
     /// 配置变化需重启应用生效。
     #[serde(default = "default_mcp_seach_type")]
     pub mcp_default_seach_type: i64,
+    /// 启用自动登录（依赖已存账密）。默认关——用户主动开。
+    #[serde(default)]
+    pub auto_login_enabled: bool,
 }
 
 fn default_true() -> bool { true }
@@ -96,6 +99,7 @@ impl Config {
             mcp_enabled: true,
             mcp_port: DEFAULT_MCP_PORT,
             mcp_default_seach_type: DEFAULT_MCP_SEACH_TYPE,
+            auto_login_enabled: false,
         }
     }
 
@@ -208,20 +212,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7 }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7 }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7 };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -272,6 +276,7 @@ mod tests {
             tray_hint_shown: false, last_interval_sec: 300,
             auto_claim_enabled: false, auto_claim_seach_type: None,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
+            auto_login_enabled: false,
         }.normalize();
         assert_eq!(c.detail_width_pct, Some(20.0));
     }
@@ -300,6 +305,7 @@ mod tests {
             tray_hint_shown: false, last_interval_sec: 0,
             auto_claim_enabled: false, auto_claim_seach_type: None,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
+            auto_login_enabled: false,
         };
         assert_eq!(base().normalize().last_interval_sec, 30, "0 -> 最小 30");
         let mut c = base(); c.last_interval_sec = 5;
@@ -320,6 +326,7 @@ mod tests {
             tray_hint_shown: false, last_interval_sec: 120,
             auto_claim_enabled: false, auto_claim_seach_type: None,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
+            auto_login_enabled: false,
         };
         c = c.normalize();
         assert_eq!(c.interval_sec, 0, "interval 0 = 暂停，保留");
@@ -338,6 +345,7 @@ mod tests {
             tray_hint_shown: false, last_interval_sec: 300,
             auto_claim_enabled: false, auto_claim_seach_type: None,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
+            auto_login_enabled: false,
         };
         // 暂停：记 last=300，interval->0
         c = c.toggled_pause();
@@ -451,5 +459,28 @@ mod tests {
         let mut c = Config::default_with(2);
         c.mcp_default_seach_type = 0;
         assert_eq!(c.normalize().mcp_default_seach_type, 7);
+    }
+
+    #[test]
+    fn default_with_auto_login_off() {
+        let c = Config::default_with(2);
+        assert!(!c.auto_login_enabled);
+    }
+
+    #[test]
+    fn legacy_config_defaults_auto_login() {
+        let legacy = r#"{"whitelist":[2],"interval_sec":300}"#;
+        let c: Config = serde_json::from_str(legacy).unwrap();
+        assert!(!c.auto_login_enabled);
+    }
+
+    #[test]
+    fn normalize_preserves_auto_login() {
+        let mut c = Config::default_with(2);
+        c.auto_login_enabled = true;
+        assert!(c.normalize().auto_login_enabled);
+        let mut c2 = Config::default_with(2);
+        c2.auto_login_enabled = false;
+        assert!(!c2.normalize().auto_login_enabled);
     }
 }

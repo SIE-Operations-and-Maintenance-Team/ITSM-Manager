@@ -4,6 +4,7 @@ use crate::cache;
 use crate::config::{self, Config};
 use crate::scheduler::{self, Scheduler};
 use crate::state::{self, AppState};
+use keyring::Entry;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -57,29 +58,92 @@ pub fn clear_creds(app: AppHandle, state: State<AppState>) -> Result<(), String>
     Ok(())
 }
 
-/// 保存账密（"记住密码"勾选时，明文存 app_data_dir/stored-cred.json，后续应加密）
+const KEYCHAIN_SERVICE: &str = "itsm-manager";
+const KEYCHAIN_USER: &str = "default";
+
+#[derive(Debug, PartialEq)]
+enum MigrationAction {
+    None,
+    Migrate,
+    DeletePlaintext,
+}
+
+/// 迁移决策纯函数（输入：明文文件存在?、keychain 存在? → 动作）
+fn decide_migration(plaintext_exists: bool, keychain_exists: bool) -> MigrationAction {
+    match (plaintext_exists, keychain_exists) {
+        (false, _) => MigrationAction::None,
+        (true, true) => MigrationAction::DeletePlaintext,
+        (true, false) => MigrationAction::Migrate,
+    }
+}
+
+/// 保存账密到 keychain（"记住密码"/"自动登录"勾选时）。签名不变，前端无感。
 #[tauri::command]
 pub fn save_stored_cred(cred: state::StoredCred, app: AppHandle) -> Result<(), String> {
+    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+        .map_err(|e| format!("安全存储不可用: {}", e))?;
+    let json = serde_json::to_string(&cred).map_err(|e| e.to_string())?;
+    entry.set_password(&json).map_err(|e| format!("安全存储写入失败: {}", e))?;
+    // 迁移成功后删旧明文（若存在）
     if let Some(p) = state::stored_cred_path(&app) {
-        let s = serde_json::to_string_pretty(&cred).map_err(|e| e.to_string())?;
-        state::atomic_write(&p, &s)?;
+        let _ = std::fs::remove_file(&p);
     }
     Ok(())
 }
 
+/// 读账密（惰性迁移：keychain 无 + 明文有 → 迁移）。签名不变。
 #[tauri::command]
 pub fn load_stored_cred(app: AppHandle) -> Option<state::StoredCred> {
-    state::stored_cred_path(&app).and_then(|p| {
-        std::fs::read_to_string(&p)
-            .ok()
-            .and_then(|s| serde_json::from_str::<state::StoredCred>(&s).ok())
-    })
+    let plaintext_exists = state::stored_cred_path(&app)
+        .map(|p| p.exists())
+        .unwrap_or(false);
+    let keychain_cred = match Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER) {
+        Ok(e) => e.get_password().ok().and_then(|s| serde_json::from_str(&s).ok()),
+        Err(_) => None,
+    };
+    let keychain_exists = keychain_cred.is_some();
+
+    match decide_migration(plaintext_exists, keychain_exists) {
+        MigrationAction::None => keychain_cred,
+        MigrationAction::DeletePlaintext => {
+            // keychain 已有，明文是残留 → 删
+            if let Some(p) = state::stored_cred_path(&app) {
+                let _ = std::fs::remove_file(&p);
+            }
+            keychain_cred
+        }
+        MigrationAction::Migrate => {
+            // 读明文 → 写 keychain → 删明文；写失败则降级返明文凭据（保留文件）
+            let cred = state::stored_cred_path(&app).and_then(|p| {
+                std::fs::read_to_string(&p)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<state::StoredCred>(&s).ok())
+            });
+            if let Some(c) = cred {
+                let written = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER)
+                    .ok()
+                    .and_then(|e| serde_json::to_string(&c).ok().and_then(|j| e.set_password(&j).ok()))
+                    .is_some();
+                if written {
+                    if let Some(p) = state::stored_cred_path(&app) {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                }
+                return Some(c);
+            }
+            None
+        }
+    }
 }
 
+/// 清账密（登出/取消记住密码）。签名不变。
 #[tauri::command]
 pub fn clear_stored_cred(app: AppHandle) -> Result<(), String> {
+    if let Ok(entry) = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER) {
+        let _ = entry.delete_credential();
+    }
     if let Some(p) = state::stored_cred_path(&app) {
-        let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(&p);
     }
     Ok(())
 }
@@ -356,6 +420,39 @@ pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
     apply_autostart(&app, enabled)
 }
 
+// ============================ 自动登录辅助 ============================
+
+/// 探活当前 token：Ok(true)=有效，Ok(false)=失效(Auth)，Err=暂时性(网络/服务器)
+#[tauri::command]
+pub async fn verify_token(state: State<'_, AppState>) -> Result<bool, String> {
+    let token = state::get_token(&state)?;
+    match api::probe_token(&state.client, &token).await {
+        Ok(valid) => Ok(valid),
+        Err(api::RefreshError::Network) => Err("网络错误".into()),
+        Err(api::RefreshError::Server) => Err("服务器错误".into()),
+        Err(api::RefreshError::Auth) => Ok(false), // 防御：probe_token 内部已转 Ok(false)
+    }
+}
+
+/// 是否以 --hidden 启动（开机自启）；复用 setup 同款判断表达式
+#[tauri::command]
+pub fn is_start_hidden() -> bool {
+    std::env::args().any(|a| a == "--hidden")
+}
+
+/// 发系统通知（静默模式自动登录失败/未存账密/验证码 fallback 用）
+#[tauri::command]
+pub fn send_system_notification(title: String, body: String, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(&title)
+        .body(&body)
+        .show()
+        .map_err(|e| format!("通知失败: {}", e))?;
+    Ok(())
+}
+
 // ============================ 关于 ============================
 
 /// 当前应用版本号（编译期注入，与 Cargo.toml / package.json / tauri.conf.json 一致）
@@ -384,5 +481,30 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     {
         let _ = url;
         Err("当前平台不支持打开外链".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decide_migration_no_plaintext_no_keychain() {
+        assert_eq!(decide_migration(false, false), MigrationAction::None);
+    }
+
+    #[test]
+    fn decide_migration_no_plaintext_has_keychain() {
+        assert_eq!(decide_migration(false, true), MigrationAction::None);
+    }
+
+    #[test]
+    fn decide_migration_plaintext_no_keychain_migrate() {
+        assert_eq!(decide_migration(true, false), MigrationAction::Migrate);
+    }
+
+    #[test]
+    fn decide_migration_both_delete_plaintext() {
+        assert_eq!(decide_migration(true, true), MigrationAction::DeletePlaintext);
     }
 }

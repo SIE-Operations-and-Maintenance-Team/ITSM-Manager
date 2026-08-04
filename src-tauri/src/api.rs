@@ -71,6 +71,21 @@ pub async fn list_views(client: &reqwest::Client, token: &str) -> Result<Value, 
     .await
 }
 
+/// 探活 token 三态分类（纯函数，便于单测）：
+/// Ok(_) → Ok(true) 有效；Err 含 AUTH_EXPIRED_ERR → Ok(false) 失效；其他 Err → Err(Network) 暂时性
+pub fn classify_probe(r: Result<Value, String>) -> Result<bool, RefreshError> {
+    match r {
+        Ok(_) => Ok(true),
+        Err(e) if e.contains(AUTH_EXPIRED_ERR) => Ok(false),
+        Err(_) => Err(RefreshError::Network),
+    }
+}
+
+/// 探活：调 list_views（轻量 GET，复用 do_get 的 PERMISSION_NOT_PASS 识别）
+pub async fn probe_token(client: &reqwest::Client, token: &str) -> Result<bool, RefreshError> {
+    classify_probe(list_views(client, token).await)
+}
+
 /// 列表搜索参数（全可选；未填字段不加入请求 params）
 /// 字段名按 ITSM find-pagination 后端 key（camelCase），前端 invoke 时用 camelCase 传。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -787,5 +802,23 @@ mod tests {
         });
         assert!(is_permission_not_pass(&v));
         assert!(!is_permission_not_pass(&json!({"code": 800})));
+    }
+
+    #[test]
+    fn classify_probe_ok_is_valid() {
+        assert_eq!(classify_probe(Ok(json!({"data": []}))), Ok(true));
+    }
+
+    #[test]
+    fn classify_probe_auth_expired_is_false() {
+        assert_eq!(classify_probe(Err(AUTH_EXPIRED_ERR.into())), Ok(false));
+    }
+
+    #[test]
+    fn classify_probe_network_err_is_transient() {
+        assert_eq!(
+            classify_probe(Err("请求失败: connection refused".into())),
+            Err(RefreshError::Network)
+        );
     }
 }

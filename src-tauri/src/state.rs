@@ -43,7 +43,8 @@ pub struct Creds {
     pub user_name: String,
 }
 
-/// "记住密码"保存的账密（MVP 明文存 stored-cred.json，后续应换 stronghold/keychain 加密）
+/// "记住密码"保存的账密（经 keyring crate 存 Windows Credential Manager，
+/// service=itsm-manager / user=default；commands.rs load_stored_cred 内嵌旧明文惰性迁移）
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StoredCred {
     pub account: String,

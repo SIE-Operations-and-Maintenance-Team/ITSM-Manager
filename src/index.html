@@ -16,6 +16,7 @@
       <input id="login-account" class="login-input" type="text" placeholder="账号（邮箱）" autocomplete="username">
       <input id="login-password" class="login-input" type="password" placeholder="密码" autocomplete="current-password">
       <label class="remember"><input id="login-remember" type="checkbox"> 记住密码</label>
+      <label class="remember"><input id="login-auto" type="checkbox"> 自动登录</label>
       <button id="login-btn" class="btn primary">登录</button>
       <button id="login-external-btn" class="btn">外部窗口登录</button>
       <p id="login-tip" class="tip"></p>
@@ -101,6 +102,7 @@
           <div class="set-group">
             <h5>启动与关闭</h5>
             <label class="set-row"><span class="toggle"><input type="checkbox" id="settings-autostart"></span> 开机自启</label>
+            <label class="set-row"><span class="toggle"><input type="checkbox" id="settings-auto-login"></span> 自动登录（需先在登录页勾选"记住密码"）</label>
             <label class="set-row"><span class="toggle"><input type="checkbox" id="settings-min-tray"></span> 关闭窗口时最小化到托盘（不退出）</label>
           </div>
           <div class="set-group">
