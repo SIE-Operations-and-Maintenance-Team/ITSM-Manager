@@ -1017,6 +1017,128 @@ document.querySelectorAll('dialog [data-close]').forEach(b => {
   b.addEventListener('click', () => b.closest('dialog').close());
 });
 
+// ============ 图片大图预览：详情面板内 img 双击弹出，滚轮缩放 / 拖动 / 多图切换 ============
+// 复用原生 <dialog> 的 modal 语义（Esc 关闭、backdrop、顶层层级），不与表单 dialog 共用内容结构
+const IP_MIN_SCALE = 0.2, IP_MAX_SCALE = 5;
+let ipImages = [];      // 当前详情面板内的 img 列表
+let ipIndex = 0;        // 当前图片索引
+let ipScale = 1, ipTx = 0, ipTy = 0;   // transform 状态（transform-origin: 0 0）
+let ipDrag = null;      // 拖动状态 { sx, sy, tx0, ty0 }
+
+function ipApply() {
+  const img = $('img-preview')?.querySelector('.ip-img');
+  if (img) img.style.transform = `translate(${ipTx}px, ${ipTy}px) scale(${ipScale})`;
+}
+
+// 切到第 i 张并重置变换；越界回绕
+function ipShow(i) {
+  const dlg = $('img-preview');
+  if (!dlg || ipImages.length === 0) return;
+  ipIndex = (i + ipImages.length) % ipImages.length;
+  const src = ipImages[ipIndex];
+  const img = dlg.querySelector('.ip-img');
+  img.src = src.src;
+  img.alt = src.alt || '';
+  ipScale = 1; ipTx = 0; ipTy = 0;
+  img.style.transform = '';
+  const multi = ipImages.length > 1;
+  dlg.querySelector('.ip-count').textContent = multi ? `${ipIndex + 1} / ${ipImages.length}` : '';
+  dlg.querySelector('.ip-prev').hidden = !multi;
+  dlg.querySelector('.ip-next').hidden = !multi;
+}
+
+// 打开预览：收集 detail-pane 内全部 img，以双击的 img 为起点
+function openImagePreview(target) {
+  const pane = $('detail-pane');
+  const all = pane ? [...pane.querySelectorAll('img')] : [];
+  if (!all.includes(target)) all.unshift(target);
+  ipImages = all.length ? all : [target];
+  ipShow(ipImages.indexOf(target));
+  $('img-preview').showModal();
+}
+
+function initImagePreview() {
+  const dlg = $('img-preview');
+  if (!dlg) return;
+  const img = dlg.querySelector('.ip-img');
+
+  // 委托：详情面板内双击 img 弹大图（一次绑定，renderDetail 重渲染无需重绑）
+  const pane = $('detail-pane');
+  if (pane) {
+    pane.addEventListener('dblclick', e => {
+      if (e.target.tagName === 'IMG' && e.target.src) openImagePreview(e.target);
+    });
+  }
+
+  // 滚轮缩放：以鼠标位置为锚点（origin 0 0 下 tx += kx*(1-ns/old)）
+  img.addEventListener('wheel', e => {
+    e.preventDefault();
+    const old = ipScale;
+    const ns = Math.max(IP_MIN_SCALE, Math.min(IP_MAX_SCALE, old * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+    if (ns === old) return;
+    const r = img.getBoundingClientRect();
+    ipTx += (e.clientX - r.left) * (1 - ns / old);
+    ipTy += (e.clientY - r.top) * (1 - ns / old);
+    ipScale = ns;
+    ipApply();
+  }, { passive: false });
+
+  // 双击图片：适应窗口 ↔ 实际像素尺寸（1:1）；origin 0 0 下补偿 translate 使中心不动
+  img.addEventListener('dblclick', e => {
+    e.stopPropagation();
+    if (ipScale === 1 && ipTx === 0 && ipTy === 0) {
+      const cw = img.clientWidth, ch = img.clientHeight;
+      if (img.naturalWidth && cw) {
+        const r = Math.max(img.naturalWidth / cw, img.naturalHeight / ch);
+        if (r > 1.01) {
+          ipScale = r;
+          ipTx = cw * (1 - r) / 2;
+          ipTy = ch * (1 - r) / 2;
+          ipApply();
+        }
+      }
+    } else {
+      ipScale = 1; ipTx = 0; ipTy = 0; ipApply();
+    }
+  });
+
+  // 拖动平移（mousedown 在 img，move/up 走 document 以便鼠标越出 img 仍生效）
+  img.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    ipDrag = { sx: e.clientX, sy: e.clientY, tx0: ipTx, ty0: ipTy };
+    img.classList.add('dragging');
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!ipDrag) return;
+    ipTx = ipDrag.tx0 + (e.clientX - ipDrag.sx);
+    ipTy = ipDrag.ty0 + (e.clientY - ipDrag.sy);
+    ipApply();
+  });
+  document.addEventListener('mouseup', () => {
+    if (!ipDrag) return;
+    ipDrag = null;
+    img.classList.remove('dragging');
+  });
+
+  // 左右切换（按钮 + 键盘 ←→）
+  dlg.querySelector('.ip-prev').addEventListener('click', () => ipShow(ipIndex - 1));
+  dlg.querySelector('.ip-next').addEventListener('click', () => ipShow(ipIndex + 1));
+  dlg.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft') ipShow(ipIndex - 1);
+    else if (e.key === 'ArrowRight') ipShow(ipIndex + 1);
+  });
+
+  // 点 backdrop（target===dialog 自身）关闭
+  dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+
+  // 关闭后清理状态与 src（释放图片资源）
+  dlg.addEventListener('close', () => {
+    ipImages = []; ipIndex = 0; ipScale = 1; ipTx = 0; ipTy = 0; ipDrag = null;
+    img.src = ''; img.style.transform = ''; img.classList.remove('dragging');
+  });
+}
+
 // 单条接单 API 调用。成功返 {ok:true}；业务/网络失败返 {ok:false,msg}；
 // token 失效（命中 isAuthExpired）向上抛，供批量接单中断。
 async function claimOne(id) {
@@ -1769,6 +1891,7 @@ $('settings-submit').addEventListener('click', async () => {
 
 initResizer();
 enableResizableDialogs();
+initImagePreview();
 applyDetailWidth();
 initSearchUI();
 init();

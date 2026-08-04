@@ -108,6 +108,20 @@ tbody tr.selected { background: #e8f1fd; }
 /* 弹窗 */
 dialog { border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: 480px; max-height: 90vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,.15); }
 dialog::backdrop { background: rgba(0,0,0,.3); }
+
+/* 图片大图预览：覆盖 dialog 默认表单样式 → 全屏透明 + 居中 img */
+/* overflow:visible 让放大后超出 dialog 的图片可见（靠 translate 平移浏览） */
+dialog.img-preview { border: 0; border-radius: 0; padding: 0; width: max-content; height: max-content; max-width: none; max-height: none; overflow: visible; background: transparent; box-shadow: none; }
+dialog.img-preview::backdrop { background: rgba(0,0,0,.86); }
+/* transform-origin:0 0：缩放锚点公式 tx += kx*(1-ns/old) 依赖左上角为变换原点 */
+.img-preview .ip-img { display: block; max-width: 92vw; max-height: 88vh; object-fit: contain; transform-origin: 0 0; cursor: grab; -webkit-user-drag: none; user-select: none; }
+.img-preview .ip-img.dragging { cursor: grabbing; }
+.img-preview .ip-nav { position: fixed; top: 50%; transform: translateY(-50%); width: 44px; height: 56px; background: rgba(0,0,0,.45); color: #fff; border: 0; border-radius: 6px; font-size: 28px; line-height: 1; cursor: pointer; z-index: 2; }
+.img-preview .ip-nav:hover { background: rgba(0,0,0,.7); }
+.img-preview .ip-prev { left: 18px; }
+.img-preview .ip-next { right: 18px; }
+.img-preview .ip-count { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); color: #fff; background: rgba(0,0,0,.5); padding: 4px 12px; border-radius: 12px; font-size: 12px; z-index: 2; }
+
 dialog h3 { margin: 0 0 12px; font-size: 15px; }
 
 /* 可拖动 + 可缩放弹窗（回复/解决/补单） */
