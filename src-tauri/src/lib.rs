@@ -20,10 +20,15 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
         .parse()
         .map_err(|e| format!("URL 解析失败: {}", e))?;
     let login_url = "https://help.chinasie.com/login?redirect=/maintenance";
-    let win = WebviewWindowBuilder::new(&app, "login", tauri::WebviewUrl::External(url))
+    let mut builder = WebviewWindowBuilder::new(&app, "login", tauri::WebviewUrl::External(url))
         .title("ITSM 登录")
         .inner_size(1000.0, 720.0)
-        .visible(visible)
+        .visible(visible);
+    // 隐藏窗口（login_auto 静默路径）跳过任务栏，避免静默重登时任务栏闪烁
+    if !visible {
+        builder = builder.skip_taskbar(true);
+    }
+    let win = builder
         .build()
         .map_err(|e| format!("打开登录窗口失败: {}", e))?;
     // 清残留 session（HttpOnly cookie + localStorage）：ITSM 靠 cookie 自动跳 /maintenance，
