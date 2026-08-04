@@ -356,6 +356,39 @@ pub fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
     apply_autostart(&app, enabled)
 }
 
+// ============================ 自动登录辅助 ============================
+
+/// 探活当前 token：Ok(true)=有效，Ok(false)=失效(Auth)，Err=暂时性(网络/服务器)
+#[tauri::command]
+pub async fn verify_token(state: State<'_, AppState>) -> Result<bool, String> {
+    let token = state::get_token(&state)?;
+    match api::probe_token(&state.client, &token).await {
+        Ok(valid) => Ok(valid),
+        Err(api::RefreshError::Network) => Err("网络错误".into()),
+        Err(api::RefreshError::Server) => Err("服务器错误".into()),
+        Err(api::RefreshError::Auth) => Ok(false), // 防御：probe_token 内部已转 Ok(false)
+    }
+}
+
+/// 是否以 --hidden 启动（开机自启）；复用 setup 同款判断表达式
+#[tauri::command]
+pub fn is_start_hidden() -> bool {
+    std::env::args().any(|a| a == "--hidden")
+}
+
+/// 发系统通知（静默模式自动登录失败/未存账密/验证码 fallback 用）
+#[tauri::command]
+pub fn send_system_notification(title: String, body: String, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(&title)
+        .body(&body)
+        .show()
+        .map_err(|e| format!("通知失败: {}", e))?;
+    Ok(())
+}
+
 // ============================ 关于 ============================
 
 /// 当前应用版本号（编译期注入，与 Cargo.toml / package.json / tauri.conf.json 一致）
