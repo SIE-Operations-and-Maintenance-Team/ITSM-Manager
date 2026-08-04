@@ -21,6 +21,10 @@ let currentSearch = null;   // 搜索态（当前视图工作变量，随 applyV
 let currentFetchedAt = null;   // 当前列表数据时间戳（状态栏"X分钟前"）
 let currentIsSearch = false;   // 当前列表是否搜索结果
 let viewStates = new Map();    // seachType -> ViewState（per-view 内存快照）
+// 自动登录模式标记：null=手动；'startup'=启动过渡；'silent-boot'=开机自启静默；'silent-runtime'=运行中静默
+let autoLoginMode = null;
+// 自动登录确定性失败/验证码放弃标志：挡住后续 need-login 自动触发，避免循环
+let autoLoginGaveUp = false;
 
 // 读取某视图持久化的 pageSize，未配置或非法回退 50
 async function getPageSizeFor(st) {
@@ -297,11 +301,60 @@ function toast(msg, type = '') {
 }
 
 async function init() {
+  const hidden = await invoke('is_start_hidden');
+  let cfg = { auto_login_enabled: false };
+  try { cfg = await invoke('get_config', { seachType: currentSeachType }); } catch (e) {}
+  let creds = null;
+  try { creds = await invoke('get_creds'); } catch (e) {}
+
+  if (creds && creds.token) {
+    if (cfg.auto_login_enabled) {
+      // 启动主动验证 token（设计第 3 节 B）；verify 期间显示登录页骨架避免白屏
+      if (!hidden) showLogin();
+      try {
+        const valid = await invoke('verify_token');
+        if (valid) { showMain(creds); return; }
+        // 失效 → 自动登录
+        startAutoLogin(hidden ? 'silent-boot' : 'startup');
+      } catch (e) {
+        // 暂时性错误：过渡停登录页 tip / 静默重试
+        if (hidden) {
+          setTimeout(() => init_retry_verify(hidden), 5000);  // 简单退避重试
+        } else {
+          showLogin();
+          setTip('网络异常，请稍后重试', true);
+        }
+      }
+    } else {
+      showMain(creds);   // 未勾自动登录：乐观进主界面（现状）
+    }
+    return;
+  }
+  // 无 token
+  if (cfg.auto_login_enabled) {
+    startAutoLogin(hidden ? 'silent-boot' : 'startup');
+  } else {
+    showLogin();
+  }
+}
+
+// 静默启动 verify_token 网络重试（最多 3 次）
+async function init_retry_verify(hidden, attempt = 1) {
   try {
-    const creds = await invoke('get_creds');
-    if (creds && creds.token) { showMain(creds); return; }
-  } catch (e) {}
-  showLogin();
+    const valid = await invoke('verify_token');
+    let creds = null;
+    try { creds = await invoke('get_creds'); } catch (e) {}
+    if (valid && creds) { showMain(creds); return; }
+    startAutoLogin(hidden ? 'silent-boot' : 'startup');
+  } catch (e) {
+    if (attempt < 3) {
+      setTimeout(() => init_retry_verify(hidden, attempt + 1), 5000 * attempt);
+    } else {
+      invoke('send_system_notification', {
+        title: 'ITSM 管理工具', body: '网络异常，自动登录失败，请打开应用手动登录'
+      }).catch(() => {});
+    }
+  }
 }
 
 // 切到登录屏并复位登录态；每次进入都用已存账密（"记住密码"）填充空框
@@ -347,6 +400,8 @@ function showMain(creds) {
 
 // 登录（自建：账密 → login_auto 注入外部窗口自动填充）
 async function doLogin() {
+  autoLoginMode = null;   // 手动登录：清除自动登录模式标记
+  autoLoginGaveUp = false; // 手动登录：重置放弃标志
   const account = $('login-account').value.trim();
   const password = $('login-password').value;
   if (!account || !password) { setTip('请输入账号和密码', true); return; }
@@ -358,6 +413,36 @@ async function doLogin() {
   } catch (e) {
     setTip('登录启动失败: ' + e, true);
     $('login-btn').disabled = false;
+  }
+}
+
+// 自动登录触发：mode ∈ {'startup','silent-boot','silent-runtime'}
+async function startAutoLogin(mode) {
+  if (autoLoginMode !== null || autoLoginGaveUp) return;   // 防抖 + 失败放弃
+  const stored = await invoke('load_stored_cred');
+  if (!stored || !stored.account) { fallbackNoCred(mode); return; }
+  autoLoginMode = mode;
+  if (mode === 'startup') {
+    showLogin();
+    setTip('正在自动登录...');
+  }
+  // silent-* 不切屏、不 tip；login_auto 开隐藏 webview
+  invoke('login_auto', { account: stored.account, password: stored.password }).catch(e => {
+    if (mode === 'startup') setTip('登录启动失败: ' + e, true);
+    autoLoginMode = null;
+  });
+}
+
+// 无账密降级：过渡停登录页 tip；静默发通知
+function fallbackNoCred(mode) {
+  if (mode === 'startup') {
+    showLogin();
+    setTip('自动登录已开启但未存账密，请手动登录并勾选记住密码', true);
+  } else {
+    invoke('send_system_notification', {
+      title: 'ITSM 管理工具',
+      body: '自动登录未存账密，请打开应用登录'
+    }).catch(() => {});
   }
 }
 $('login-btn').addEventListener('click', doLogin);
@@ -378,6 +463,18 @@ $('login-external-btn').addEventListener('click', async () => {
 listen('login-success', (ev) => {
   const c = ev.payload;
   if (!c || !c.token) return;
+  const mode = autoLoginMode;
+  autoLoginMode = null;   // 复位（成功结束）
+  autoLoginGaveUp = false;
+
+  if (mode === 'silent-runtime' || mode === 'silent-boot') {
+    // 静默：不切屏、不 toast；写回 token 由后端 save_creds_internal 已做；
+    // restart scheduler 全白名单刷新（失效前那次拉取失败，含当前视图）
+    setTip('');
+    invoke('trigger_refresh', {}).catch(() => {});  // seachType=None → restart loop
+    return;
+  }
+  // startup / null（手动）：落地勾选 + showMain + toast（Task 8 Step 5 逻辑）
   const remember = $('login-remember').checked;
   const auto = $('login-auto').checked;
   const acct = $('login-account').value.trim();
@@ -399,11 +496,40 @@ listen('login-success', (ev) => {
 });
 listen('login-timeout', () => { setTip('登录超时，请重试', true); });
 listen('login-failed', (ev) => {
-  setTip(ev.payload || '登录失败', true);
-  $('login-btn').disabled = false;
+  const msg = ev.payload || '登录失败';
+  const mode = autoLoginMode;
+  autoLoginMode = null;
+  autoLoginGaveUp = true;   // 确定性失败，挡住后续 need-login 自动触发
+  if (mode === 'silent-boot') {
+    // 开机自启静默：不弹窗，发通知；主窗口保持隐藏
+    invoke('send_system_notification', {
+      title: 'ITSM 管理工具', body: '自动登录失败：' + msg + '，请打开应用手动登录'
+    }).catch(() => {});
+  } else if (mode === 'silent-runtime') {
+    // 运行中静默：切登录页 fallback（主窗口可见）
+    showLogin();
+    setTip(msg, true);
+    $('login-btn').disabled = false;
+  } else {
+    // startup / null（手动）：停登录页 tip
+    setTip(msg, true);
+    $('login-btn').disabled = false;
+  }
 });
 listen('login-captcha', () => {
-  setTip('需要验证码，请在弹出的 ITSM 窗口手动输入验证码后点登录', true);
+  const mode = autoLoginMode;
+  // captcha 不复位 autoLoginMode（登录未结束，等 beacon 回传 success/failed）
+  if (mode === 'silent-boot') {
+    // 开机自启静默：无法静默处理验证码 → 抑制 webview show + 发通知 + 放弃
+    autoLoginMode = null;
+    autoLoginGaveUp = true;
+    invoke('send_system_notification', {
+      title: 'ITSM 管理工具', body: '自动登录需要验证码，请打开应用手动登录'
+    }).catch(() => {});
+  } else {
+    // startup / silent-runtime / null：提示 + webview show 让用户输验证码（login_auto 后端已 show）
+    setTip('需要验证码，请在弹出的 ITSM 窗口手动输入验证码后点登录', true);
+  }
 });
 
 $('logout-btn').addEventListener('click', async () => {
@@ -1430,7 +1556,16 @@ listen('tickets-updated', (ev) => {
   }
 });
 
-listen('need-login', () => showLogin());
+listen('need-login', async () => {
+  if (autoLoginMode !== null) return;   // 静默登录进行中，防抖忽略
+  let cfg = { auto_login_enabled: false };
+  try { cfg = await invoke('get_config', { seachType: currentSeachType }); } catch (e) {}
+  if (cfg.auto_login_enabled && !autoLoginGaveUp) {
+    startAutoLogin('silent-runtime');
+  } else {
+    showLogin();   // 放弃过/未开启 → 手动登录页
+  }
+});
 
 listen('refresh-failed', () => toast('刷新连续失败，可能服务异常', 'error'));
 

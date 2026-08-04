@@ -110,10 +110,17 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
                     let _ = w.close();
                 }
             } else if path.starts_with("/login_captcha") {
-                // 验证码场景：显示 webview 窗口，让用户手动输验证码 + 点登录
+                // 验证码场景：仅主窗口可见时显示登录 webview；
+                // 主窗口隐藏（--hidden 开机自启）时不 show，前端发通知让用户手动
+                let main_visible = app_srv
+                    .get_webview_window("main")
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(false);
                 let _ = app_srv.emit("login-captcha", ());
-                if let Some(w) = app_srv.get_webview_window("login") {
-                    let _ = w.show();
+                if main_visible {
+                    if let Some(w) = app_srv.get_webview_window("login") {
+                        let _ = w.show();
+                    }
                 }
             }
         }
