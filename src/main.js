@@ -419,9 +419,13 @@ async function doLogin() {
 // 自动登录触发：mode ∈ {'startup','silent-boot','silent-runtime'}
 async function startAutoLogin(mode) {
   if (autoLoginMode !== null || autoLoginGaveUp) return;   // 防抖 + 失败放弃
+  autoLoginMode = mode;   // 同步前置：关闭 await 窗口，防 need-login 抢入致 login_auto 并发
   const stored = await invoke('load_stored_cred');
-  if (!stored || !stored.account) { fallbackNoCred(mode); return; }
-  autoLoginMode = mode;
+  if (!stored || !stored.account) {
+    autoLoginMode = null;   // 无账密回退，复位标记
+    fallbackNoCred(mode);
+    return;
+  }
   if (mode === 'startup') {
     showLogin();
     setTip('正在自动登录...');
