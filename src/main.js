@@ -321,6 +321,20 @@ async function showLogin() {
       $('login-remember').checked = true;
     }
   } catch (e) {}
+  // 读 config 同步自动登录勾选；强联动 #login-remember
+  try {
+    const cfg = await invoke('get_config', { seachType: currentSeachType });
+    $('login-auto').checked = !!cfg.auto_login_enabled;
+    syncRememberLock();
+  } catch (e) {}
+}
+
+// 强联动：勾 #login-auto 则勾并禁用 #login-remember；取消则恢复
+function syncRememberLock() {
+  const auto = $('login-auto').checked;
+  const rem = $('login-remember');
+  if (auto) { rem.checked = true; rem.disabled = true; }
+  else { rem.disabled = false; }
 }
 
 function showMain(creds) {
@@ -348,6 +362,7 @@ async function doLogin() {
 }
 $('login-btn').addEventListener('click', doLogin);
 $('login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('login-auto').addEventListener('change', syncRememberLock);
 
 // 外部窗口登录（降级：验证码 / SSO / 异常账号）
 $('login-external-btn').addEventListener('click', async () => {
@@ -363,15 +378,21 @@ $('login-external-btn').addEventListener('click', async () => {
 listen('login-success', (ev) => {
   const c = ev.payload;
   if (!c || !c.token) return;
-  // 记住密码：勾选则保存，未勾选则清除已存
   const remember = $('login-remember').checked;
+  const auto = $('login-auto').checked;
   const acct = $('login-account').value.trim();
   const pwd = $('login-password').value;
-  if (remember && acct && pwd) {
+  // 记住密码 / 自动登录：勾选则存账密（keychain），未勾选则清除
+  if ((remember || auto) && acct && pwd) {
     invoke('save_stored_cred', { cred: { account: acct, password: pwd } }).catch(() => {});
   } else {
     invoke('clear_stored_cred').catch(() => {});
   }
+  // auto_login_enabled 落地（登录页是手动登录唯一入口，此处覆盖 config）
+  invoke('get_config', { seachType: currentSeachType }).then(cur => {
+    cur.auto_login_enabled = auto;
+    return invoke('save_config', { config: cur });
+  }).catch(() => {});
   setTip('登录成功，正在加载...');
   showMain(c);
   toast('登录成功', 'success');
@@ -1434,6 +1455,7 @@ async function openSettings() {
   const intVal = cfg.interval_sec;
   $('settings-interval').value = [30, 60, 120, 300].includes(intVal) ? intVal : 300;
   $('settings-autostart').checked = !!cfg.autostart_enabled;
+  $('settings-auto-login').checked = !!cfg.auto_login_enabled;
   $('settings-min-tray').checked = !!cfg.minimize_to_tray;
   $('settings-auto-claim').checked = !!cfg.auto_claim_enabled;
   const acViewSel = $('settings-auto-claim-view');
@@ -1519,6 +1541,18 @@ attachAutocomplete('settings-rq-input', 'settings-rq-list',
 $('settings-sg-select').addEventListener('change', () => {
   const g = allSupportGroups.find(x => x.sgId === $('settings-sg-select').value);
   settingsDefaults.sgId = g?.sgId || ''; settingsDefaults.sgName = g?.supportGroupName || '';
+});
+
+// 自动登录勾选即时落盘 config（已登录态 restart 无害；失败回退勾选并 toast）
+$('settings-auto-login').addEventListener('change', async (e) => {
+  try {
+    const cur = await invoke('get_config', { seachType: currentSeachType });
+    cur.auto_login_enabled = e.target.checked;
+    await invoke('save_config', { config: cur });
+  } catch (err) {
+    e.target.checked = !e.target.checked;  // 回退
+    toast('保存失败: ' + err, 'error');
+  }
 });
 
 $('settings-btn').addEventListener('click', openSettings);
