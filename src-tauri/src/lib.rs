@@ -274,8 +274,12 @@ pub fn run() {
                 let client = app_state.client.clone();
                 let port = cfg.mcp_port;
                 let default_seach_type = cfg.mcp_default_seach_type;
+                let default_support_group = match (cfg.default_support_group_id.clone(), cfg.default_support_group_name.clone()) {
+                    (Some(id), Some(name)) if !id.trim().is_empty() && !name.trim().is_empty() => Some((id, name)),
+                    _ => None,
+                };
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = mcp::serve(token, client, port, default_seach_type).await {
+                    if let Err(error) = mcp::serve(token, client, port, default_seach_type, default_support_group).await {
                         eprintln!("[mcp] {error}；MCP 不可用，主界面继续运行");
                     }
                 });

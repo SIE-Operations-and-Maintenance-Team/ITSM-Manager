@@ -15,11 +15,17 @@ pub struct ItsmHandler {
     token: TokenStore,
     client: reqwest::Client,
     default_seach_type: i64,
+    default_support_group: Option<(String, String)>,
 }
 
 impl ItsmHandler {
-    pub fn new(token: TokenStore, client: reqwest::Client, default_seach_type: i64) -> Self {
-        Self { token, client, default_seach_type }
+    pub fn new(
+        token: TokenStore,
+        client: reqwest::Client,
+        default_seach_type: i64,
+        default_support_group: Option<(String, String)>,
+    ) -> Self {
+        Self { token, client, default_seach_type, default_support_group }
     }
 
     fn token(&self) -> Result<String, McpError> {
@@ -487,14 +493,14 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 
-fn build_router(token: TokenStore, client: reqwest::Client, default_seach_type: i64) -> axum::Router {
+fn build_router(token: TokenStore, client: reqwest::Client, default_seach_type: i64, default_support_group: Option<(String, String)>) -> axum::Router {
     let config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
         .with_json_response(true)
         .with_sse_keep_alive(None);
     let service: StreamableHttpService<ItsmHandler, LocalSessionManager> =
         StreamableHttpService::new(
-            move || Ok(ItsmHandler::new(token.clone(), client.clone(), default_seach_type)),
+            move || Ok(ItsmHandler::new(token.clone(), client.clone(), default_seach_type, default_support_group.clone())),
             Default::default(),
             config,
         );
@@ -506,12 +512,13 @@ pub async fn serve(
     client: reqwest::Client,
     port: u16,
     default_seach_type: i64,
+    default_support_group: Option<(String, String)>,
 ) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| format!("绑定 127.0.0.1:{port} 失败: {error}"))?;
     println!("[mcp] listening on http://127.0.0.1:{port}/mcp");
-    axum::serve(listener, build_router(token, client, default_seach_type))
+    axum::serve(listener, build_router(token, client, default_seach_type, default_support_group))
         .await
         .map_err(|error| format!("MCP server 退出: {error}"))
 }
@@ -521,7 +528,7 @@ mod tests {
     use super::*;
 
     fn handler() -> ItsmHandler {
-        ItsmHandler::new(TokenStore::default(), reqwest::Client::new(), 7)
+        ItsmHandler::new(TokenStore::default(), reqwest::Client::new(), 7, None)
     }
 
     #[test]
@@ -622,7 +629,7 @@ mod tests {
     async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let router = build_router(TokenStore::default(), reqwest::Client::new(), 7);
+        let router = build_router(TokenStore::default(), reqwest::Client::new(), 7, None);
         let task = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
