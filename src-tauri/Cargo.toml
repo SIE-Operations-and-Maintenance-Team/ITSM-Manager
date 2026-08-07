@@ -21,7 +21,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net",
 base64 = "0.22"
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
-keyring = "3"
+keyring = { version = "3", features = ["windows-native"] }
 rmcp = { version = "=2.2.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 axum = "0.8"
 
