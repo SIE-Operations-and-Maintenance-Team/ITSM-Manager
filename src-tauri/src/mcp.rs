@@ -1,4 +1,4 @@
-// MCP 边界层：对外暴露 10 个工单 tools（6 只读 + 4 写），复用 api.rs HTTP 实现，不含新 ITSM endpoint
+// MCP 边界层：对外暴露 16 个工单 tools（11 只读 + 5 写），复用 api.rs HTTP 实现，不含新 ITSM endpoint
 use crate::api::{self, FetchError, SearchParams, AUTH_EXPIRED_ERR};
 use crate::state::TokenStore;
 use rmcp::{
@@ -15,11 +15,17 @@ pub struct ItsmHandler {
     token: TokenStore,
     client: reqwest::Client,
     default_seach_type: i64,
+    default_support_group: Option<(String, String)>,
 }
 
 impl ItsmHandler {
-    pub fn new(token: TokenStore, client: reqwest::Client, default_seach_type: i64) -> Self {
-        Self { token, client, default_seach_type }
+    pub fn new(
+        token: TokenStore,
+        client: reqwest::Client,
+        default_seach_type: i64,
+        default_support_group: Option<(String, String)>,
+    ) -> Self {
+        Self { token, client, default_seach_type, default_support_group }
     }
 
     fn token(&self) -> Result<String, McpError> {
@@ -107,6 +113,54 @@ struct ResolveParams {
     solution: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CreateTicketParams {
+    #[schemars(description = "二级服务目录 stId（list_service_tree 返回的二级 serviceType[].stId）")]
+    service_type: String,
+    #[schemars(description = "三级服务目录叶子 stId（list_service_tree 返回的三级 children[].stId）；同时作为 get_replenish_template 的 leaf_id")]
+    service_sub_type: String,
+    #[schemars(description = "工单主题")]
+    order_subject: String,
+    #[schemars(description = "详细描述，HTML 格式：换行 <br>、段落 <p>、重点 <strong>、列表 <ul>/<li>、表格 <table>")]
+    detail: String,
+    #[schemars(description = "客户组 cgId（search_customer_groups 返回的 cgId）")]
+    contact_customer_group: String,
+    #[schemars(description = "客户组名称（与 contact_customer_group 配套传入）")]
+    contact_customer_group_name: String,
+    #[schemars(description = "提单人 userId（search_base_persons 返回的 userId）")]
+    requestor: String,
+    #[schemars(description = "提单人名称（与 requestor 配套传入）")]
+    requestor_name: String,
+    #[schemars(description = "支持组 sgId（list_support_groups 返回的 sgId）。省略时用应用设置中的默认支持组")]
+    assign: Option<String>,
+    #[schemars(description = "支持组名称（与 assign 配套传入）")]
+    assign_name: Option<String>,
+    #[schemars(description = "支持人 userId（search_base_persons 返回的 userId）。可选")]
+    support_by: Option<String>,
+    #[schemars(description = "支持人名称（与 support_by 配套传入）。可选")]
+    support_name: Option<String>,
+    #[schemars(description = "补单模板 id（get_replenish_template 返回的 data.id）。建议先调 get_replenish_template 取值")]
+    create_template_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GetReplenishTemplateParams {
+    #[schemars(description = "三级服务目录叶子 stId（即 create_ticket 的 service_sub_type）")]
+    leaf_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SearchCustomerGroupsParams {
+    #[schemars(description = "客户组名称关键字")]
+    keyword: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SearchBasePersonsParams {
+    #[schemars(description = "人员姓名/工号关键字（提单人、支持人均用本工具查询）")]
+    keyword: String,
+}
+
 fn api_error(message: impl Into<String>) -> McpError {
     McpError::internal_error(message.into(), None)
 }
@@ -158,6 +212,87 @@ fn required_text(field: &str, value: String) -> Result<String, McpError> {
     Ok(value)
 }
 
+/// 由入参与应用默认支持组组装 `save_replenish` 的 params body（纯函数，便于单测）。
+/// 返回值即 `api::save_replenish` 的 `params`。
+/// 必填缺空 → invalid_params；assign 未传且无默认 → invalid_params；
+/// 可选 ID/name 仅传其一（配套校验）→ invalid_params。
+fn build_replenish_params(
+    params: &CreateTicketParams,
+    default_support_group: Option<&(String, String)>,
+) -> Result<Value, McpError> {
+    let service_type = required_text("service_type", params.service_type.clone())?;
+    let service_sub_type = required_text("service_sub_type", params.service_sub_type.clone())?;
+    let order_subject = required_text("order_subject", params.order_subject.clone())?;
+    let detail = required_text("detail", params.detail.clone())?;
+    let contact_customer_group = required_text("contact_customer_group", params.contact_customer_group.clone())?;
+    let contact_customer_group_name = required_text("contact_customer_group_name", params.contact_customer_group_name.clone())?;
+    let requestor = required_text("requestor", params.requestor.clone())?;
+    let requestor_name = required_text("requestor_name", params.requestor_name.clone())?;
+
+    fn pair(
+        id: Option<&str>,
+        name: Option<&str>,
+        id_field: &str,
+        name_field: &str,
+    ) -> Result<(String, String), McpError> {
+        let id = id.map(str::trim).filter(|s| !s.is_empty());
+        let name = name.map(str::trim).filter(|s| !s.is_empty());
+        match (id, name) {
+            (Some(i), Some(n)) => Ok((i.to_string(), n.to_string())),
+            (None, None) => Ok((String::new(), String::new())),
+            _ => Err(McpError::invalid_params(
+                format!("{id_field} 与 {name_field} 必须同时传入或同时省略"),
+                None,
+            )),
+        }
+    }
+
+    let (assign_in, assign_name_in) = pair(params.assign.as_deref(), params.assign_name.as_deref(), "assign", "assign_name")?;
+    let (assign, assign_name) = if !assign_in.is_empty() {
+        (assign_in, assign_name_in)
+    } else if let Some((id, name)) = default_support_group {
+        (id.clone(), name.clone())
+    } else {
+        return Err(McpError::invalid_params(
+            "未配置默认支持组，请在应用设置中配置，或显式传入 assign 与 assign_name".to_string(),
+            None,
+        ));
+    };
+
+    let (support_by, support_name) = pair(params.support_by.as_deref(), params.support_name.as_deref(), "support_by", "support_name")?;
+    let create_template_id = params
+        .create_template_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    Ok(json!({
+        "serviceType": service_type,
+        "serviceSubType": service_sub_type,
+        "orderSubject": order_subject,
+        "detail": detail,
+        "fileIds": [],
+        "priority": "3",
+        "contactCustomerGroup": contact_customer_group,
+        "requestor": requestor,
+        "assign": assign,
+        "supportBy": support_by,
+        "effect": "4",
+        "urgency": "1",
+        "cc": [],
+        "orderSign": 1,
+        "contactCustomerGroupName": contact_customer_group_name,
+        "requestorName": requestor_name,
+        "assignName": assign_name,
+        "assignLevel": 1,
+        "supportName": support_name,
+        "relatedorderList": [],
+        "createTemplateId": create_template_id,
+    }))
+}
+
 fn pagination(page_index: Option<i64>, page_size: Option<i64>) -> Result<(i64, i64), McpError> {
     let page_index = page_index.unwrap_or(1);
     let page_size = page_size.unwrap_or(50);
@@ -184,6 +319,78 @@ impl ItsmHandler {
     async fn list_views(&self) -> Result<CallToolResult, McpError> {
         let token = self.token()?;
         let value = api::list_views(&self.client, &token)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "列出三级服务目录树：一级大类 → 二级 serviceType(stId) → 三级 children[](stId)。补单时取二级 stId 作 service_type、三级叶子 stId 作 service_sub_type。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn list_service_tree(&self) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let value = api::list_service_tree(&self.client, &token)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "按三级服务目录叶子 stId 取补单模板；返回的 data.id 作为 create_ticket 的 create_template_id。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn get_replenish_template(
+        &self,
+        Parameters(params): Parameters<GetReplenishTemplateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let leaf_id = required_text("leaf_id", params.leaf_id)?;
+        let value = api::get_replenish_template(&self.client, &token, &leaf_id)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "按关键字模糊搜索客户组；返回 cgId 与 customerGroupName，作为 create_ticket 的 contact_customer_group / contact_customer_group_name。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn search_customer_groups(
+        &self,
+        Parameters(params): Parameters<SearchCustomerGroupsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let keyword = required_text("keyword", params.keyword)?;
+        let value = api::search_customer_groups(&self.client, &token, &keyword)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "按关键字模糊搜索人员；返回 userId 与 psnName。提单人(create_ticket 的 requestor)与支持人(support_by)均用本工具查询。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn search_base_persons(
+        &self,
+        Parameters(params): Parameters<SearchBasePersonsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let keyword = required_text("keyword", params.keyword)?;
+        let value = api::search_base_persons(&self.client, &token, &keyword)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "列出全部支持组；返回 sgId 与 supportGroupName，作为 create_ticket 的 assign / assign_name（也可不传 assign 走应用默认支持组）。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn list_support_groups(&self) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let value = api::list_support_groups(&self.client, &token)
             .await
             .map_err(api_error)?;
         Ok(json_result(value))
@@ -481,20 +688,36 @@ impl ItsmHandler {
             .map_err(api_error)?;
         Ok(json_result(value))
     }
+
+    #[tool(
+        description = "补单：代提一个新工单。本操作会在真实 ITSM 建立工单。建议流程：list_service_tree 取 service_type/service_sub_type → get_replenish_template 取 create_template_id → search_customer_groups 取 contact_customer_group(+name) → search_base_persons 取 requestor(+name)，可选 support_by(+name) → 调用本工具建单 → get_detail(data 的 incidentId) 取展示单号 incidentCode。返回 code==800 时 data 为新单 incidentId；否则后端 msg 透传。",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true)
+    )]
+    async fn create_ticket(
+        &self,
+        Parameters(params): Parameters<CreateTicketParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let body = build_replenish_params(&params, self.default_support_group.as_ref())?;
+        let value = api::save_replenish(&self.client, &token, body)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
 }
 
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 
-fn build_router(token: TokenStore, client: reqwest::Client, default_seach_type: i64) -> axum::Router {
+fn build_router(token: TokenStore, client: reqwest::Client, default_seach_type: i64, default_support_group: Option<(String, String)>) -> axum::Router {
     let config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
         .with_json_response(true)
         .with_sse_keep_alive(None);
     let service: StreamableHttpService<ItsmHandler, LocalSessionManager> =
         StreamableHttpService::new(
-            move || Ok(ItsmHandler::new(token.clone(), client.clone(), default_seach_type)),
+            move || Ok(ItsmHandler::new(token.clone(), client.clone(), default_seach_type, default_support_group.clone())),
             Default::default(),
             config,
         );
@@ -506,12 +729,13 @@ pub async fn serve(
     client: reqwest::Client,
     port: u16,
     default_seach_type: i64,
+    default_support_group: Option<(String, String)>,
 ) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| format!("绑定 127.0.0.1:{port} 失败: {error}"))?;
     println!("[mcp] listening on http://127.0.0.1:{port}/mcp");
-    axum::serve(listener, build_router(token, client, default_seach_type))
+    axum::serve(listener, build_router(token, client, default_seach_type, default_support_group))
         .await
         .map_err(|error| format!("MCP server 退出: {error}"))
 }
@@ -521,7 +745,7 @@ mod tests {
     use super::*;
 
     fn handler() -> ItsmHandler {
-        ItsmHandler::new(TokenStore::default(), reqwest::Client::new(), 7)
+        ItsmHandler::new(TokenStore::default(), reqwest::Client::new(), 7, None)
     }
 
     #[test]
@@ -532,12 +756,18 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "create_ticket",
                 "get_detail",
+                "get_replenish_template",
                 "get_ticket_by_code",
                 "list_replies",
+                "list_service_tree",
+                "list_support_groups",
                 "list_views",
                 "reply",
                 "resolve",
+                "search_base_persons",
+                "search_customer_groups",
                 "search_tickets_by_code",
                 "search_tickets_by_customer_group",
                 "suspend",
@@ -549,7 +779,7 @@ mod tests {
             let annotations = tool.annotations.as_ref().unwrap();
             let is_write = matches!(
                 tool.name.as_ref(),
-                "reply" | "resolve" | "suspend" | "unhang"
+                "create_ticket" | "reply" | "resolve" | "suspend" | "unhang"
             );
             assert_eq!(annotations.read_only_hint, Some(!is_write), "{}", tool.name);
             assert_eq!(
@@ -622,7 +852,7 @@ mod tests {
     async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let router = build_router(TokenStore::default(), reqwest::Client::new(), 7);
+        let router = build_router(TokenStore::default(), reqwest::Client::new(), 7, None);
         let task = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
@@ -692,11 +922,109 @@ mod tests {
         )
         .await;
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 16);
         assert!(tools.iter().any(|tool| tool["name"] == "list_views"));
         assert!(tools.iter().any(|tool| tool["name"] == "resolve"));
 
         task.abort();
         let _ = task.await;
+    }
+
+    fn cgp(overrides: impl FnOnce(&mut CreateTicketParams)) -> CreateTicketParams {
+        let mut p = CreateTicketParams {
+            service_type: "ST1".into(),
+            service_sub_type: "SST1".into(),
+            order_subject: "主题".into(),
+            detail: "<p>描述</p>".into(),
+            contact_customer_group: "CG1".into(),
+            contact_customer_group_name: "客户组A".into(),
+            requestor: "RQ1".into(),
+            requestor_name: "张三".into(),
+            assign: None,
+            assign_name: None,
+            support_by: None,
+            support_name: None,
+            create_template_id: None,
+        };
+        overrides(&mut p);
+        p
+    }
+
+    #[test]
+    fn build_replenish_params_missing_required_returns_error() {
+        let p = cgp(|p| p.order_subject = "  ".into());
+        let err = build_replenish_params(&p, None).unwrap_err();
+        assert!(err.message.contains("order_subject"), "实际: {}", err.message);
+    }
+
+    #[test]
+    fn build_replenish_params_fills_assign_from_config() {
+        let p = cgp(|_| {});
+        let v = build_replenish_params(&p, Some(&("SG1".into(), "支持组X".into()))).unwrap();
+        assert_eq!(v["assign"], "SG1");
+        assert_eq!(v["assignName"], "支持组X");
+    }
+
+    #[test]
+    fn build_replenish_params_missing_assign_no_config_returns_error() {
+        let p = cgp(|_| {});
+        let err = build_replenish_params(&p, None).unwrap_err();
+        assert!(err.message.contains("默认支持组"), "实际: {}", err.message);
+    }
+
+    #[test]
+    fn build_replenish_params_overrides_assign() {
+        let p = cgp(|p| {
+            p.assign = Some("SG9".into());
+            p.assign_name = Some("自定义组".into());
+        });
+        let v = build_replenish_params(&p, Some(&("SG1".into(), "默认组".into()))).unwrap();
+        assert_eq!(v["assign"], "SG9");
+        assert_eq!(v["assignName"], "自定义组");
+    }
+
+    #[test]
+    fn build_replenish_params_pair_check() {
+        let p = cgp(|p| p.assign = Some("SG9".into()));
+        let err = build_replenish_params(&p, Some(&("SG1".into(), "默认组".into()))).unwrap_err();
+        assert!(err.message.contains("assign") && err.message.contains("assign_name"), "实际: {}", err.message);
+    }
+
+    #[test]
+    fn build_replenish_params_hardcoded_fields() {
+        let p = cgp(|_| {});
+        let v = build_replenish_params(&p, Some(&("SG1".into(), "G".into()))).unwrap();
+        assert_eq!(v["fileIds"], json!([]));
+        assert_eq!(v["priority"], "3");
+        assert_eq!(v["effect"], "4");
+        assert_eq!(v["urgency"], "1");
+        assert_eq!(v["cc"], json!([]));
+        assert_eq!(v["orderSign"], 1);
+        assert_eq!(v["assignLevel"], 1);
+        assert_eq!(v["relatedorderList"], json!([]));
+    }
+
+    #[test]
+    fn build_replenish_params_matches_frontend_shape() {
+        let p = cgp(|p| {
+            p.support_by = Some("U2".into());
+            p.support_name = Some("李四".into());
+            p.create_template_id = Some("TPL1".into());
+        });
+        let v = build_replenish_params(&p, Some(&("SG1".into(), "G".into()))).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        let expected = [
+            "serviceType","serviceSubType","orderSubject","detail","fileIds","priority",
+            "contactCustomerGroup","requestor","assign","supportBy","effect","urgency","cc",
+            "orderSign","contactCustomerGroupName","requestorName","assignName","assignLevel",
+            "supportName","relatedorderList","createTemplateId",
+        ];
+        for k in expected {
+            assert!(keys.contains(&k), "缺字段 {k}");
+        }
+        assert_eq!(keys.len(), expected.len(), "字段数不匹配：{:?}", keys);
+        assert_eq!(v["supportBy"], "U2");
+        assert_eq!(v["supportName"], "李四");
+        assert_eq!(v["createTemplateId"], "TPL1");
     }
 }
