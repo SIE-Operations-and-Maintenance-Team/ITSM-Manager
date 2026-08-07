@@ -311,7 +311,11 @@ async function init() {
   if (creds && creds.token) {
     if (cfg.auto_login_enabled) {
       // 启动主动验证 token（设计第 3 节 B）；verify 期间显示登录页骨架避免白屏
-      if (!hidden) showLogin();
+      if (!hidden) {
+        showLogin();
+        setTip('正在自动登录...');
+        $('login-btn').disabled = true;   // 覆盖 verify 等待窗口，给"自动登录中"反馈
+      }
       try {
         const valid = await invoke('verify_token');
         if (valid) { showMain(creds); return; }
@@ -430,10 +434,11 @@ async function startAutoLogin(mode) {
   if (mode === 'startup') {
     showLogin();
     setTip('正在自动登录...');
+    $('login-btn').disabled = true;   // 自动登录期间置灰，避免重复触发（失败由 login-failed 复位）
   }
   // silent-* 不切屏、不 tip；login_auto 开隐藏 webview
   invoke('login_auto', { account: stored.account, password: stored.password }).catch(e => {
-    if (mode === 'startup') setTip('登录启动失败: ' + e, true);
+    if (mode === 'startup') { setTip('登录启动失败: ' + e, true); $('login-btn').disabled = false; }
     autoLoginMode = null;
   });
 }
