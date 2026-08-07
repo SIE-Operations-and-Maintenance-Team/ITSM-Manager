@@ -227,7 +227,22 @@ fn save_creds_internal(app: &tauri::AppHandle, creds: Creds) {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // 单实例卡控：第二个进程启动时唤出已有实例主窗口，新进程自身退出。
+    // 仅 release 启用，避免 dev 热重载偶发被自身挡掉。
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // --hidden（开机自启重复触发）不打扰用户，保持静默
+        if args.iter().any(|a| a == "--hidden") {
+            return;
+        }
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+    }));
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
