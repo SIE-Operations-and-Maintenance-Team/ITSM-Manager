@@ -143,6 +143,24 @@ struct CreateTicketParams {
     create_template_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GetReplenishTemplateParams {
+    #[schemars(description = "三级服务目录叶子 stId（即 create_ticket 的 service_sub_type）")]
+    leaf_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SearchCustomerGroupsParams {
+    #[schemars(description = "客户组名称关键字")]
+    keyword: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SearchBasePersonsParams {
+    #[schemars(description = "人员姓名/工号关键字（提单人、支持人均用本工具查询）")]
+    keyword: String,
+}
+
 fn api_error(message: impl Into<String>) -> McpError {
     McpError::internal_error(message.into(), None)
 }
@@ -301,6 +319,78 @@ impl ItsmHandler {
     async fn list_views(&self) -> Result<CallToolResult, McpError> {
         let token = self.token()?;
         let value = api::list_views(&self.client, &token)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "列出三级服务目录树：一级大类 → 二级 serviceType(stId) → 三级 children[](stId)。补单时取二级 stId 作 service_type、三级叶子 stId 作 service_sub_type。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn list_service_tree(&self) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let value = api::list_service_tree(&self.client, &token)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "按三级服务目录叶子 stId 取补单模板；返回的 data.id 作为 create_ticket 的 create_template_id。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn get_replenish_template(
+        &self,
+        Parameters(params): Parameters<GetReplenishTemplateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let leaf_id = required_text("leaf_id", params.leaf_id)?;
+        let value = api::get_replenish_template(&self.client, &token, &leaf_id)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "按关键字模糊搜索客户组；返回 cgId 与 customerGroupName，作为 create_ticket 的 contact_customer_group / contact_customer_group_name。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn search_customer_groups(
+        &self,
+        Parameters(params): Parameters<SearchCustomerGroupsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let keyword = required_text("keyword", params.keyword)?;
+        let value = api::search_customer_groups(&self.client, &token, &keyword)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "按关键字模糊搜索人员；返回 userId 与 psnName。提单人(create_ticket 的 requestor)与支持人(support_by)均用本工具查询。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn search_base_persons(
+        &self,
+        Parameters(params): Parameters<SearchBasePersonsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let keyword = required_text("keyword", params.keyword)?;
+        let value = api::search_base_persons(&self.client, &token, &keyword)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
+
+    #[tool(
+        description = "列出全部支持组；返回 sgId 与 supportGroupName，作为 create_ticket 的 assign / assign_name（也可不传 assign 走应用默认支持组）。",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn list_support_groups(&self) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let value = api::list_support_groups(&self.client, &token)
             .await
             .map_err(api_error)?;
         Ok(json_result(value))
@@ -651,11 +741,16 @@ mod tests {
             names,
             vec![
                 "get_detail",
+                "get_replenish_template",
                 "get_ticket_by_code",
                 "list_replies",
+                "list_service_tree",
+                "list_support_groups",
                 "list_views",
                 "reply",
                 "resolve",
+                "search_base_persons",
+                "search_customer_groups",
                 "search_tickets_by_code",
                 "search_tickets_by_customer_group",
                 "suspend",
@@ -810,7 +905,7 @@ mod tests {
         )
         .await;
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 15);
         assert!(tools.iter().any(|tool| tool["name"] == "list_views"));
         assert!(tools.iter().any(|tool| tool["name"] == "resolve"));
 
