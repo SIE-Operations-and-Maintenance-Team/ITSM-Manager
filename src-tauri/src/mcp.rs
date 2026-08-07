@@ -1,4 +1,4 @@
-// MCP 边界层：对外暴露 10 个工单 tools（6 只读 + 4 写），复用 api.rs HTTP 实现，不含新 ITSM endpoint
+// MCP 边界层：对外暴露 16 个工单 tools（11 只读 + 5 写），复用 api.rs HTTP 实现，不含新 ITSM endpoint
 use crate::api::{self, FetchError, SearchParams, AUTH_EXPIRED_ERR};
 use crate::state::TokenStore;
 use rmcp::{
@@ -688,6 +688,22 @@ impl ItsmHandler {
             .map_err(api_error)?;
         Ok(json_result(value))
     }
+
+    #[tool(
+        description = "补单：代提一个新工单。本操作会在真实 ITSM 建立工单。建议流程：list_service_tree 取 service_type/service_sub_type → get_replenish_template 取 create_template_id → search_customer_groups 取 contact_customer_group(+name) → search_base_persons 取 requestor(+name)，可选 support_by(+name) → 调用本工具建单 → get_detail(data 的 incidentId) 取展示单号 incidentCode。返回 code==800 时 data 为新单 incidentId；否则后端 msg 透传。",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true)
+    )]
+    async fn create_ticket(
+        &self,
+        Parameters(params): Parameters<CreateTicketParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let token = self.token()?;
+        let body = build_replenish_params(&params, self.default_support_group.as_ref())?;
+        let value = api::save_replenish(&self.client, &token, body)
+            .await
+            .map_err(api_error)?;
+        Ok(json_result(value))
+    }
 }
 
 use rmcp::transport::streamable_http_server::{
@@ -740,6 +756,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "create_ticket",
                 "get_detail",
                 "get_replenish_template",
                 "get_ticket_by_code",
@@ -762,7 +779,7 @@ mod tests {
             let annotations = tool.annotations.as_ref().unwrap();
             let is_write = matches!(
                 tool.name.as_ref(),
-                "reply" | "resolve" | "suspend" | "unhang"
+                "create_ticket" | "reply" | "resolve" | "suspend" | "unhang"
             );
             assert_eq!(annotations.read_only_hint, Some(!is_write), "{}", tool.name);
             assert_eq!(
@@ -905,7 +922,7 @@ mod tests {
         )
         .await;
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 16);
         assert!(tools.iter().any(|tool| tool["name"] == "list_views"));
         assert!(tools.iter().any(|tool| tool["name"] == "resolve"));
 
