@@ -7,5 +7,5 @@
   },
   "license": "UNLICENSED",
   "keywords": ["itsm-manager", "tauri", "release", "internal"],
-  "skills": ["./skills/itsm-manager-release"]
+  "skills": []
 }
