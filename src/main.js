@@ -1841,7 +1841,8 @@ async function checkForUpdate(silent) {
     $('update-now-btn').disabled = false;
     $('update-now-btn').textContent = '立即更新';
     $('update-later-btn').hidden = false;
-    openDlg($('update-dialog'));
+    // update-dialog 固定右下角（CSS 定位），不走 applyDialogGeom 的居中计算
+    $('update-dialog').showModal();
   } catch (e) {
     if (!silent) toast(String(e), 'error');
   }

@@ -44,6 +44,16 @@ jobs:
             exit 1
           fi
 
+      - name: 提取 release notes（最新 commit body，作为 latest.json 的 notes）
+        id: relnotes
+        shell: bash
+        run: |
+          {
+            echo "notes<<RELNOTES_EOF"
+            git log -1 --pretty=%B
+            echo "RELNOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: 构建 Tauri 应用并创建 Release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -54,5 +64,6 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'ITSM Manager ${{ github.ref_name }}'
+          releaseBody: ${{ steps.relnotes.outputs.notes }}
           releaseDraft: false
           prerelease: false
