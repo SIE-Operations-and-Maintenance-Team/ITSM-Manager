@@ -5,19 +5,19 @@
     "name": "SIE O&M Team"
   },
   "metadata": {
-    "description": "ITSM Manager 项目相关 Claude Code skills（发版、构建、开发链路等）",
-    "version": "0.1.0"
+    "description": "ITSM Manager 项目相关 Claude Code skills（ITSM 工单查询/操作/补单、客户运维服务报告）",
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "itsm-manager-skills",
       "source": "./",
-      "description": "ITSM Manager（Tauri 桌面应用）项目工作流 skills：发版流程、构建验证、MCP/扩展开发链路。",
-      "version": "0.1.0",
+      "description": "ITSM Manager 项目 Claude Code skills：ITSM 工单查询/操作/补单、客户运维服务报告生成。",
+      "version": "0.2.0",
       "author": {
         "name": "lzm04521"
       },
-      "keywords": ["itsm-manager", "tauri", "release", "internal"],
+      "keywords": ["itsm-manager", "itsm", "incident", "service-report", "internal"],
       "category": "workflow"
     }
   ]

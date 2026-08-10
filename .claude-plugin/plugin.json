@@ -1,11 +1,11 @@
 {
   "name": "itsm-manager-skills",
-  "description": "ITSM Manager（Tauri 桌面应用）项目工作流 skills：发版流程、构建验证、MCP/扩展开发链路。",
-  "version": "0.1.0",
+  "description": "ITSM Manager 项目 Claude Code skills：ITSM 工单查询/操作/补单、客户运维服务报告生成。",
+  "version": "0.2.0",
   "author": {
     "name": "lzm04521"
   },
   "license": "UNLICENSED",
-  "keywords": ["itsm-manager", "tauri", "release", "internal"],
-  "skills": []
+  "keywords": ["itsm-manager", "itsm", "incident", "service-report", "internal"],
+  "skills": ["./skills/itsm", "./skills/itsm-service-report"]
 }
