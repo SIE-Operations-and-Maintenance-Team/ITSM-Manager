@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "itsm-manager",
+  "owner": {
+    "name": "SIE O&M Team"
+  },
+  "metadata": {
+    "description": "ITSM Manager 项目相关 Claude Code skills（发版、构建、开发链路等）",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "itsm-manager-skills",
+      "source": "./",
+      "description": "ITSM Manager（Tauri 桌面应用）项目工作流 skills：发版流程、构建验证、MCP/扩展开发链路。",
+      "version": "0.1.0",
+      "author": {
+        "name": "lzm04521"
+      },
+      "keywords": ["itsm-manager", "tauri", "release", "internal"],
+      "category": "workflow"
+    }
+  ]
+}
