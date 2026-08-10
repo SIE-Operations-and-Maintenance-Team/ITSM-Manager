@@ -139,7 +139,7 @@ dialog .row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font
 .whitelist-list { max-height: 200px; overflow-y: auto; }
 
 /* toast */
-.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 8px 20px; border-radius: 4px; z-index: 9999; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+.toast { position: fixed; inset: auto; margin: 0; bottom: 24px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 8px 20px; border-radius: 4px; z-index: 9999; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
 .toast.error { background: var(--danger); }
 .toast.success { background: var(--success); }
 
@@ -261,3 +261,14 @@ dialog .rich-editor { margin-top: 4px; }
 .about-k { color: var(--muted); width: 64px; flex: none; }
 .about-link { color: var(--primary); text-decoration: none; }
 .about-link:hover { text-decoration: underline; }
+.about-actions { display: flex; align-items: center; gap: 12px; padding: 7px 0; }
+.update-status { font-size: 12px; color: var(--muted); }
+#update-dialog { width: 460px; }
+.update-version-row { margin-bottom: 8px; }
+.update-new-ver { font-size: 16px; font-weight: 600; }
+.update-cur-ver { font-size: 12px; color: var(--muted); margin-left: 8px; }
+.update-notes { font-size: 13px; white-space: pre-wrap; max-height: 180px; overflow-y: auto; margin-bottom: 8px; line-height: 1.5; }
+.update-progress-wrap { margin: 8px 0; }
+.update-progress-bar { height: 8px; background: #e5e5e5; border-radius: 4px; overflow: hidden; }
+.update-progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width .2s; }
+.update-progress-text { font-size: 12px; color: var(--muted); display: block; margin-top: 4px; }

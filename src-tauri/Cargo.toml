@@ -1,6 +1,6 @@
 [package]
 name = "itsm-manager"
-version = "0.1.5"
+version = "0.1.6"
 description = "ITSM 工单管理工具"
 edition = "2021"
 
@@ -22,6 +22,7 @@ base64 = "0.22"
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 keyring = { version = "3", features = ["windows-native"] }
 rmcp = { version = "=2.2.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 axum = "0.8"

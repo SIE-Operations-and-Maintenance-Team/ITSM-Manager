@@ -297,8 +297,11 @@ function toast(msg, type = '') {
   const t = $('toast');
   t.textContent = msg;
   t.className = 'toast' + (type ? ' ' + type : '');
-  t.hidden = false;
-  setTimeout(() => { t.hidden = true; }, 2500);
+  // 用 popover（top layer）显示，避免被 dialog 遮罩层(::backdrop)盖住
+  try { t.hidePopover(); } catch (e) {}   // 已开先隐藏，防重复 show 抛异常
+  t.showPopover();
+  clearTimeout(t._toastTimer);
+  t._toastTimer = setTimeout(() => { try { t.hidePopover(); } catch (e) {} }, 2500);
 }
 
 async function init() {
@@ -395,12 +398,18 @@ function syncRememberLock() {
   else { rem.disabled = false; }
 }
 
+let bootUpdateChecked = false;   // 启动静默检查更新去重（每次会话仅一次）
 function showMain(creds) {
   $('login-screen').hidden = true;
   $('main-screen').hidden = false;
   $('user-name').textContent = creds.user_name || '已登录';
   applyRefreshInterval();
   loadViews();
+  // 进主屏后静默检查更新一次（延迟避开启动高峰）；checkForUpdate 为函数声明，已提升
+  if (!bootUpdateChecked) {
+    bootUpdateChecked = true;
+    setTimeout(() => checkForUpdate(true), 3000);
+  }
 }
 
 // 登录（自建：账密 → login_auto 注入外部窗口自动填充）
@@ -1803,13 +1812,77 @@ document.querySelectorAll('#settings-dialog .settings-nav button').forEach(btn =
   btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));
 });
 
-// ============ 关于 ============
-const ABOUT_REPO_RELEASES = 'https://github.com/SIE-Operations-and-Maintenance-Team/ITSM-Manager/releases';
+// ============ 关于 / 版本更新 ============
+const ABOUT_REPO_URL = 'https://github.com/SIE-Operations-and-Maintenance-Team/ITSM-Manager';
 
-$('about-releases-link').addEventListener('click', (e) => {
+// 前往仓库（系统默认浏览器打开）
+$('about-repo-link').addEventListener('click', (e) => {
   e.preventDefault();
-  invoke('open_external_url', { url: ABOUT_REPO_RELEASES })
+  invoke('open_external_url', { url: ABOUT_REPO_URL })
     .catch(e => toast('打开失败: ' + e, 'error'));
+});
+
+// 检查更新：silent=true 启动静默检查（无更新/失败不提示），false 关于页手动按钮
+async function checkForUpdate(silent) {
+  try {
+    const info = await invoke('check_update');
+    if (!info.available) {
+      if (!silent) toast('已是最新版本 (v' + info.current_version + ')', 'success');
+      return;
+    }
+    // 有更新：填充 update-dialog 并弹出
+    $('update-title').textContent = '发现新版本';
+    $('update-new-version').textContent = 'v' + info.version;
+    $('update-cur-version').textContent = '（当前 v' + info.current_version + '）';
+    $('update-notes').textContent = info.notes || '(无更新说明)';
+    $('update-progress-wrap').hidden = true;
+    $('update-progress-fill').style.width = '0%';
+    $('update-progress-text').textContent = '';
+    $('update-now-btn').disabled = false;
+    $('update-now-btn').textContent = '立即更新';
+    $('update-later-btn').hidden = false;
+    openDlg($('update-dialog'));
+  } catch (e) {
+    if (!silent) toast(String(e), 'error');
+  }
+}
+
+// 关于页"检查更新"按钮
+$('check-update-btn').addEventListener('click', () => {
+  $('update-status').textContent = '检查中...';
+  checkForUpdate(false).finally(() => { $('update-status').textContent = ''; });
+});
+
+// update-dialog"立即更新"：下载（监听进度）→ NSIS 安装 → 重启
+$('update-now-btn').addEventListener('click', async () => {
+  $('update-now-btn').disabled = true;
+  $('update-now-btn').textContent = '下载中...';
+  $('update-later-btn').hidden = true;
+  $('update-progress-wrap').hidden = false;
+  try {
+    await invoke('download_and_install_update');
+    // Windows：download_and_install 内部已退出进程执行 NSIS 安装，此行一般不可达
+    $('update-progress-text').textContent = '安装完成，请重启应用';
+  } catch (e) {
+    $('update-now-btn').disabled = false;
+    $('update-now-btn').textContent = '立即更新';
+    $('update-later-btn').hidden = false;
+    $('update-progress-wrap').hidden = true;
+    toast('更新失败: ' + e, 'error');
+  }
+});
+
+// 下载进度上报（Rust emit "update-progress"）
+listen('update-progress', (ev) => {
+  const { downloaded, total } = ev.payload;
+  if (total > 0) {
+    const pct = Math.min(100, Math.round(downloaded * 100 / total));
+    $('update-progress-fill').style.width = pct + '%';
+    $('update-progress-text').textContent =
+      pct + '%（' + (downloaded / 1048576).toFixed(1) + '/' + (total / 1048576).toFixed(1) + ' MB）';
+  } else {
+    $('update-progress-text').textContent = '下载中... ' + (downloaded / 1048576).toFixed(1) + ' MB';
+  }
 });
 
 // 设置里的 autocomplete（点选只更新 settingsDefaults，确定时才落盘）

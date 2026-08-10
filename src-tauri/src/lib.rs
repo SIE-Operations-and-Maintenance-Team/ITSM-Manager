@@ -249,6 +249,7 @@ pub fn run() {
             Some(vec!["--hidden"]),
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             token: state::TokenStore::default(),
             tenant_id: std::sync::Mutex::new(state::DEFAULT_TENANT.into()),
@@ -347,6 +348,8 @@ pub fn run() {
             commands::save_stored_cred,
             commands::load_stored_cred,
             commands::clear_stored_cred,
+            commands::check_update,
+            commands::download_and_install_update,
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {

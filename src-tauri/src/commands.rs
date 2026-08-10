@@ -404,7 +404,9 @@ pub fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let mgr = app.autolaunch();
     if enabled {
         mgr.enable().map_err(|e| format!("启用自启失败: {}", e))?;
-    } else {
+    } else if mgr.is_enabled().unwrap_or(false) {
+        // 幂等：仅在当前已启用时才 disable，避免 Run 值不存在时
+        // delete_value 报 "系统找不到指定的文件。(os error 2)" 阻塞保存
         mgr.disable().map_err(|e| format!("禁用自启失败: {}", e))?;
     }
     let mut cfg = config::load(app, state::DEFAULT_SEACH_TYPE);
@@ -482,6 +484,77 @@ pub fn open_external_url(url: String) -> Result<(), String> {
         let _ = url;
         Err("当前平台不支持打开外链".into())
     }
+}
+
+// ============================ 版本更新 ============================
+
+/// 检查更新结果（前端据此决定是否弹更新提示）
+#[derive(serde::Serialize)]
+pub struct UpdateInfo {
+    pub available: bool,
+    pub current_version: String,
+    pub version: Option<String>,
+    pub notes: Option<String>,
+    pub pub_date: Option<String>,
+}
+
+/// 检查更新（只检查，不下载）。endpoint 无法访问或已是最新版时 available=false。
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<UpdateInfo, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let updater = app.updater().map_err(|e| format!("初始化 updater 失败: {e}"))?;
+    match updater.check().await.map_err(|e| format!("检查更新失败: {e}"))? {
+        Some(u) => Ok(UpdateInfo {
+            available: true,
+            current_version: current,
+            version: Some(u.version.clone()),
+            notes: u.body.clone(),
+            pub_date: u.date.map(|d| d.to_string()),
+        }),
+        None => Ok(UpdateInfo {
+            available: false,
+            current_version: current,
+            version: None,
+            notes: None,
+            pub_date: None,
+        }),
+    }
+}
+
+/// 下载并安装更新，进度通过 emit("update-progress", {downloaded, total}) 上报。
+/// Windows：download_and_install 内部已退出应用执行 NSIS passive 安装，重启由安装器接管；
+/// 非 Windows 路径到此处主动重启（Windows 上此行因进程已退出不会执行）。
+#[tauri::command]
+pub async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| format!("初始化 updater 失败: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("检查更新失败: {e}"))?
+        .ok_or_else(|| "没有可用更新".to_string())?;
+    let app_for_progress = app.clone();
+    let total = AtomicU64::new(0);
+    let downloaded = AtomicU64::new(0);
+    update
+        .download_and_install(
+            move |chunk_len, content_len| {
+                if let Some(cl) = content_len {
+                    total.store(cl, Ordering::Relaxed);
+                }
+                let d = downloaded.fetch_add(chunk_len as u64, Ordering::Relaxed)
+                    + chunk_len as u64;
+                let t = total.load(Ordering::Relaxed);
+                let _ = app_for_progress
+                    .emit("update-progress", json!({ "downloaded": d, "total": t }));
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("下载/安装失败: {e}"))?;
+    app.restart()
 }
 
 #[cfg(test)]

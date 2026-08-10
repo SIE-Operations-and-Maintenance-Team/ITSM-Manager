@@ -179,8 +179,12 @@
             <h5>关于</h5>
             <div class="about-row"><span class="about-k">应用</span><span>ITSM 管理工具</span></div>
             <div class="about-row"><span class="about-k">当前版本</span><span id="about-version">-</span></div>
+            <div class="about-actions">
+              <button id="check-update-btn" class="btn">检查更新</button>
+              <span id="update-status" class="update-status"></span>
+            </div>
             <div class="set-desc">
-              如需检查更新，前往 <a href="#" id="about-releases-link" class="about-link">项目 Release 页</a> 查看。
+              源码与发版：<a href="#" id="about-repo-link" class="about-link">GitHub 仓库</a>
             </div>
           </div>
         </section>
@@ -312,7 +316,24 @@
     <div class="ip-count"></div>
   </dialog>
 
-  <div id="toast" class="toast" hidden></div>
+  <dialog id="update-dialog" class="dialog">
+    <h3 id="update-title">发现新版本</h3>
+    <div class="update-version-row">
+      <span id="update-new-version" class="update-new-ver"></span>
+      <span id="update-cur-version" class="update-cur-ver"></span>
+    </div>
+    <div id="update-notes" class="update-notes"></div>
+    <div id="update-progress-wrap" class="update-progress-wrap" hidden>
+      <div class="update-progress-bar"><div id="update-progress-fill"></div></div>
+      <span id="update-progress-text" class="update-progress-text"></span>
+    </div>
+    <div class="dialog-actions">
+      <button id="update-later-btn" class="btn" data-close>稍后</button>
+      <button id="update-now-btn" class="btn primary">立即更新</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" popover="manual"></div>
 
   <script src="main.js"></script>
 </body>
