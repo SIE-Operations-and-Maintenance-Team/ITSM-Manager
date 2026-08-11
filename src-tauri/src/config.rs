@@ -18,16 +18,13 @@ pub const DEFAULT_PAGE_SIZE: i64 = 50;
 pub struct Config {
     pub whitelist: Vec<i64>,
     pub interval_sec: u64,
-    /// 补单默认客户组（前端 autocomplete 选，None 表示未设）
+    /// 补单默认服务目录三级（cascader 选中值，None 表示未设）
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_customer_group_id: Option<String>,
+    pub default_service_l1: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_customer_group_name: Option<String>,
-    /// 补单默认提单人
+    pub default_service_l2: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_requestor_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_requestor_name: Option<String>,
+    pub default_service_l3: Option<String>,
     /// 补单默认支持组（save body 的 assign 字段必填）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_support_group_id: Option<String>,
@@ -85,10 +82,9 @@ impl Config {
         Self {
             whitelist: vec![seach_type],
             interval_sec: DEFAULT_INTERVAL,
-            default_customer_group_id: None,
-            default_customer_group_name: None,
-            default_requestor_id: None,
-            default_requestor_name: None,
+            default_service_l1: None,
+            default_service_l2: None,
+            default_service_l3: None,
             default_support_group_id: None,
             default_support_group_name: None,
             view_page_sizes: HashMap::new(),
@@ -216,20 +212,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_customer_group_id: None, default_customer_group_name: None, default_requestor_id: None, default_requestor_name: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -241,8 +237,8 @@ mod tests {
         let legacy = r#"{"whitelist":[2],"interval_sec":300}"#;
         let c: Config = serde_json::from_str(legacy).unwrap();
         assert_eq!(c.whitelist, vec![2]);
-        assert_eq!(c.default_customer_group_id, None);
-        assert_eq!(c.default_requestor_id, None);
+        assert_eq!(c.default_service_l1, None);
+        assert_eq!(c.default_service_l3, None);
         assert!(c.view_page_sizes.is_empty());
         assert_eq!(c.detail_width_pct, None);
     }
@@ -271,8 +267,7 @@ mod tests {
     fn normalize_clamps_detail_width() {
         let c = Config {
             whitelist: vec![1], interval_sec: 300,
-            default_customer_group_id: None, default_customer_group_name: None,
-            default_requestor_id: None, default_requestor_name: None,
+            default_service_l1: None, default_service_l2: None, default_service_l3: None,
             default_support_group_id: None, default_support_group_name: None,
             view_page_sizes: HashMap::new(),
             detail_width_pct: Some(10.0),
@@ -302,8 +297,7 @@ mod tests {
         // normalize 强制 last_interval_sec >= 30，不允许 0
         let base = || Config {
             whitelist: vec![1], interval_sec: 300,
-            default_customer_group_id: None, default_customer_group_name: None,
-            default_requestor_id: None, default_requestor_name: None,
+            default_service_l1: None, default_service_l2: None, default_service_l3: None,
             default_support_group_id: None, default_support_group_name: None,
             view_page_sizes: HashMap::new(), detail_width_pct: None,
             autostart_enabled: false, minimize_to_tray: true,
@@ -324,8 +318,7 @@ mod tests {
     fn normalize_keeps_last_when_interval_zero() {
         let mut c = Config {
             whitelist: vec![1], interval_sec: 0,
-            default_customer_group_id: None, default_customer_group_name: None,
-            default_requestor_id: None, default_requestor_name: None,
+            default_service_l1: None, default_service_l2: None, default_service_l3: None,
             default_support_group_id: None, default_support_group_name: None,
             view_page_sizes: HashMap::new(), detail_width_pct: None,
             autostart_enabled: false, minimize_to_tray: true,
@@ -344,8 +337,7 @@ mod tests {
     fn toggled_pause_to_zero_and_back() {
         let mut c = Config {
             whitelist: vec![1], interval_sec: 300,
-            default_customer_group_id: None, default_customer_group_name: None,
-            default_requestor_id: None, default_requestor_name: None,
+            default_service_l1: None, default_service_l2: None, default_service_l3: None,
             default_support_group_id: None, default_support_group_name: None,
             view_page_sizes: HashMap::new(), detail_width_pct: None,
             autostart_enabled: false, minimize_to_tray: true,

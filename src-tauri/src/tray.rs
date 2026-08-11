@@ -68,6 +68,8 @@ fn handle_tray_event(tray: &tauri::tray::TrayIcon, event: TrayIconEvent) {
 
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        // unminimize 还原最小化窗口；show+set_focus 对最小化窗口无效
+        let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }

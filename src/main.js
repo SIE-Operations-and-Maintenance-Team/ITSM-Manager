@@ -1350,27 +1350,23 @@ async function openBudan() {
   }
   fillSelect($('budan-l1'), serviceTree, 'code', 'name', '一级（服务大类）');
 
-  // 一级默认选「软件服务」（按 name 匹配，命中后触发 change 联动加载二级）
-  const defaultL1 = serviceTree.find(n => n.name === '软件服务');
-  if (defaultL1) {
-    $('budan-l1').value = defaultL1.code;
+  // 服务目录默认值：优先用配置的默认服务目录三级，否则按 name 默认选「软件服务」
+  let cfg = null;
+  try { cfg = await invoke('get_config', { seachType: currentSeachType }); } catch (e) { /* 忽略 */ }
+  const defaultL1Code = cfg?.default_service_l1 || (serviceTree.find(n => n.name === '软件服务')?.code || '');
+  if (defaultL1Code) {
+    $('budan-l1').value = defaultL1Code;
     $('budan-l1').dispatchEvent(new Event('change'));
+    // 配置了默认服务目录时联动选 L2/L3（L3 change 触发取 template）
+    if (cfg?.default_service_l1 && cfg.default_service_l2) {
+      $('budan-l2').value = cfg.default_service_l2;
+      $('budan-l2').dispatchEvent(new Event('change'));
+      if (cfg.default_service_l3) {
+        $('budan-l3').value = cfg.default_service_l3;
+        $('budan-l3').dispatchEvent(new Event('change'));
+      }
+    }
   }
-
-  // 填默认客户组/提单人（来自配置）
-  try {
-    const cfg = await invoke('get_config', { seachType: currentSeachType });
-    if (cfg.default_customer_group_id) {
-      budanSel.customerGroupId = cfg.default_customer_group_id;
-      budanSel.customerGroupName = cfg.default_customer_group_name || '';
-      $('budan-cg-input').value = budanSel.customerGroupName;
-    }
-    if (cfg.default_requestor_id) {
-      budanSel.requestorId = cfg.default_requestor_id;
-      budanSel.requestorName = cfg.default_requestor_name || '';
-      $('budan-rq-input').value = budanSel.requestorName;
-    }
-  } catch (e) { /* 忽略，用户可手输 */ }
 
   openDlg($('budan-dialog'));
 }
@@ -1736,7 +1732,7 @@ listen('config-changed', async () => { await refreshAutoClaimConfig(); updateCla
 // ============ 设置 UI ============
 
 // 设置对话框里临时存的默认值（点确定才落盘）
-let settingsDefaults = { cgId: '', cgName: '', rqId: '', rqName: '', sgId: '', sgName: '' };
+let settingsDefaults = { svcL1: '', svcL2: '', svcL3: '', sgId: '', sgName: '' };
 
 async function openSettings() {
   const dlg = $('settings-dialog');
@@ -1768,12 +1764,27 @@ async function openSettings() {
 
   // 默认值回填
   settingsDefaults = {
-    cgId: cfg.default_customer_group_id || '', cgName: cfg.default_customer_group_name || '',
-    rqId: cfg.default_requestor_id || '', rqName: cfg.default_requestor_name || '',
+    svcL1: cfg.default_service_l1 || '', svcL2: cfg.default_service_l2 || '', svcL3: cfg.default_service_l3 || '',
     sgId: cfg.default_support_group_id || '', sgName: cfg.default_support_group_name || '',
   };
-  $('settings-cg-input').value = settingsDefaults.cgName;
-  $('settings-rq-input').value = settingsDefaults.rqName;
+  // 服务目录 cascader 初始化（复用全局 serviceTree，懒加载）+ 按默认值预选三级
+  if (!serviceTree) {
+    try { const res = await invoke('list_service_tree'); serviceTree = res.data || []; } catch (e) {}
+  }
+  fillSelect($('settings-svc-l1'), serviceTree, 'code', 'name', '一级');
+  // 预选用 cfg 原值判断/赋值：cascader 的 change handler 会重置 settingsDefaults 下级
+  if (cfg.default_service_l1) {
+    $('settings-svc-l1').value = cfg.default_service_l1;
+    $('settings-svc-l1').dispatchEvent(new Event('change'));
+    if (cfg.default_service_l2) {
+      $('settings-svc-l2').value = cfg.default_service_l2;
+      $('settings-svc-l2').dispatchEvent(new Event('change'));
+      if (cfg.default_service_l3) {
+        $('settings-svc-l3').value = cfg.default_service_l3;
+        $('settings-svc-l3').dispatchEvent(new Event('change'));
+      }
+    }
+  }
   // 支持组下拉（懒加载）
   if (allSupportGroups.length === 0) {
     try { const res = await invoke('list_support_groups'); allSupportGroups = res.data || []; } catch (e) {}
@@ -1886,21 +1897,29 @@ listen('update-progress', (ev) => {
   }
 });
 
-// 设置里的 autocomplete（点选只更新 settingsDefaults，确定时才落盘）
-attachAutocomplete('settings-cg-input', 'settings-cg-list',
-  q => invoke('search_customer_groups', { keyword: q }),
-  it => `${esc(it.customerGroupName)}<span class="ac-sub">${esc(it.companyName || '')}</span>`,
-  it => {
-    settingsDefaults.cgId = it.cgId; settingsDefaults.cgName = it.customerGroupName;
-    $('settings-cg-input').value = it.customerGroupName;
-  });
-attachAutocomplete('settings-rq-input', 'settings-rq-list',
-  q => invoke('search_base_persons', { keyword: q }),
-  it => `${esc(it.psnName)}<span class="ac-sub">${esc(it.depName || '')} ${esc(it.mobile || '')}</span>`,
-  it => {
-    settingsDefaults.rqId = it.userId; settingsDefaults.rqName = it.psnName;
-    $('settings-rq-input').value = it.psnName;
-  });
+// 设置里的服务目录 cascader（参照补单 budan-l1/l2 逻辑，仅记选中值，保存时落盘）
+$('settings-svc-l1').addEventListener('change', () => {
+  const l1 = serviceTree?.find(n => String(n.code) === $('settings-svc-l1').value);
+  const l2s = l1?.serviceType || [];
+  fillSelect($('settings-svc-l2'), l2s, 'stId', 'typeName', '二级');
+  $('settings-svc-l2').disabled = l2s.length === 0;
+  $('settings-svc-l3').innerHTML = '<option value="">三级</option>';
+  $('settings-svc-l3').disabled = true;
+  settingsDefaults.svcL1 = $('settings-svc-l1').value || '';
+  settingsDefaults.svcL2 = ''; settingsDefaults.svcL3 = '';
+});
+$('settings-svc-l2').addEventListener('change', () => {
+  const l1 = serviceTree?.find(n => String(n.code) === $('settings-svc-l1').value);
+  const l2 = l1?.serviceType?.find(s => s.stId === $('settings-svc-l2').value);
+  const l3s = l2?.children || [];
+  fillSelect($('settings-svc-l3'), l3s, 'stId', 'typeName', '三级');
+  $('settings-svc-l3').disabled = l3s.length === 0;
+  settingsDefaults.svcL2 = $('settings-svc-l2').value || '';
+  settingsDefaults.svcL3 = '';
+});
+$('settings-svc-l3').addEventListener('change', () => {
+  settingsDefaults.svcL3 = $('settings-svc-l3').value || '';
+});
 $('settings-sg-select').addEventListener('change', () => {
   const g = allSupportGroups.find(x => x.sgId === $('settings-sg-select').value);
   settingsDefaults.sgId = g?.sgId || ''; settingsDefaults.sgName = g?.supportGroupName || '';
@@ -1943,10 +1962,9 @@ $('settings-submit').addEventListener('click', async () => {
       config: {
         ...cur,
         whitelist, interval_sec,
-        default_customer_group_id: settingsDefaults.cgId || null,
-        default_customer_group_name: settingsDefaults.cgName || null,
-        default_requestor_id: settingsDefaults.rqId || null,
-        default_requestor_name: settingsDefaults.rqName || null,
+        default_service_l1: settingsDefaults.svcL1 || null,
+        default_service_l2: settingsDefaults.svcL2 || null,
+        default_service_l3: settingsDefaults.svcL3 || null,
         default_support_group_id: settingsDefaults.sgId || null,
         default_support_group_name: settingsDefaults.sgName || null,
         minimize_to_tray: min_tray_new,
