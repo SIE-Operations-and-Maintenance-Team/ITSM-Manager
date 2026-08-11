@@ -7,5 +7,5 @@
   },
   "license": "UNLICENSED",
   "keywords": ["itsm-manager", "itsm", "incident", "service-report", "internal"],
-  "skills": ["./skills/itsm", "./skills/itsm-service-report"]
+  "skills": ["./skills/itsm", "./skills/itsm-service-report", "./skills/itsm-replenish"]
 }
