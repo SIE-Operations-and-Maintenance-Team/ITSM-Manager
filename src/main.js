@@ -1024,6 +1024,7 @@ function openRichDialog(kind, dlgId, codeSpanId, code) {
   $(codeSpanId).textContent = code;
   const ed = ensureEditor(kind);
   if (ed) ed.reset();
+  if (kind === 'reply') resetReplyAttachments();
   openDlg($(dlgId));
 }
 
@@ -1218,14 +1219,76 @@ async function doClaim(t) {
 
 $('claim-all-btn').addEventListener('click', doClaimAll);
 
+// ============ 回复附件：选择后即传 ITSM 附件服务，提交时以 fileIds 随回复发送 ============
+const ATTACH_MAX_BYTES = 50 * 1024 * 1024;
+const replyAttachments = [];   // { fileId, fileName, size, status: 'uploading'|'ok'|'error', error }
+
+function fmtSize(n) {
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+}
+
+function renderReplyAttachments() {
+  const list = $('reply-attach-list');
+  list.hidden = replyAttachments.length === 0;
+  list.innerHTML = replyAttachments.map((a, i) => `
+    <div class="attach-item">
+      <span class="attach-name" title="${esc(a.fileName)}">${esc(a.fileName)}</span>
+      <span class="attach-size">${fmtSize(a.size)}</span>
+      <span class="attach-status ${a.status}" title="${esc(a.status === 'error' ? a.error : '')}">${a.status === 'uploading' ? '上传中…' : a.status === 'ok' ? '已上传' : '失败'}</span>
+      <button type="button" class="btn" data-rm="${i}">移除</button>
+    </div>`).join('');
+  list.querySelectorAll('button[data-rm]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      replyAttachments.splice(Number(btn.dataset.rm), 1);
+      renderReplyAttachments();
+    });
+  });
+}
+
+function resetReplyAttachments() {
+  replyAttachments.length = 0;
+  renderReplyAttachments();
+}
+
+async function addReplyAttachment(file) {
+  if (file.size > ATTACH_MAX_BYTES) return toast(`「${file.name}」超过 50MB，已跳过`, 'error');
+  const item = { fileId: null, fileName: file.name, size: file.size, status: 'uploading', error: '' };
+  replyAttachments.push(item);
+  renderReplyAttachments();
+  try {
+    const b64 = await fileToBase64(file);
+    const r = await invoke('upload_attachment', { fileName: file.name, mime: file.type || 'application/octet-stream', fileBase64: b64 });
+    item.fileId = r.file_id;
+    item.status = 'ok';
+  } catch (e) {
+    item.status = 'error';
+    item.error = String(e);
+  }
+  renderReplyAttachments();
+}
+
+$('reply-attach-btn').addEventListener('click', () => $('reply-attach-input').click());
+$('reply-attach-input').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';   // 清空以允许再次选择同名文件
+  for (const f of files) await addReplyAttachment(f);   // 串行上传，避免并发挤压
+});
+
+let replySubmitting = false;
 $('reply-submit').addEventListener('click', async () => {
   const { t } = currentAction;
   const ed = ensureEditor('reply');
   if (!ed) return;
   const html = ed.getHtml();
   if (!html) return toast('请输入回复内容');
+  if (replyAttachments.some(a => a.status === 'uploading')) return toast('附件还在上传中，请稍候', 'error');
+  const failed = replyAttachments.filter(a => a.status === 'error');
+  if (failed.length > 0 && !confirm(`${failed.length} 个附件上传失败，将不随本回复发送。仍要提交吗？`)) return;
+  if (replySubmitting) return;
+  replySubmitting = true;
   try {
-    const r = await invoke('reply', { orderId: t.incidentId, detail: html, fileIds: [], isPrivate: $('reply-private').checked, orderType: t.orderType || '1' });
+    const fileIds = replyAttachments.filter(a => a.status === 'ok').map(a => a.fileId);
+    const r = await invoke('reply', { orderId: t.incidentId, detail: html, fileIds, isPrivate: $('reply-private').checked, orderType: t.orderType || '1' });
     if (r.code === 800) {
       toast('回复成功', 'success');
       $('reply-dialog').close();
@@ -1233,6 +1296,7 @@ $('reply-submit').addEventListener('click', async () => {
       loadDetail(t);
     } else toast('回复失败: ' + (r.msg || ''), 'error');
   } catch (e) { toast('回复失败: ' + e, 'error'); }
+  finally { replySubmitting = false; }
 });
 
 $('resolve-submit').addEventListener('click', async () => {

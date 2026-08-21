@@ -1978,6 +1978,7 @@ version = "0.1.8"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "chrono",
  "keyring",
  "reqwest 0.12.28",
  "rmcp",

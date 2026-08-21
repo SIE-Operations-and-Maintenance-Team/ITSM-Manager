@@ -24,6 +24,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 keyring = { version = "3", features = ["windows-native"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rmcp = { version = "=2.2.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 axum = "0.8"
 

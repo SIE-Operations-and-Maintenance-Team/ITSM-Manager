@@ -194,6 +194,12 @@
     <h3>回复工单 — <span id="reply-code"></span></h3>
     <div id="reply-toolbar" class="rich-toolbar"></div>
     <div id="reply-editor" class="rich-editor"></div>
+    <div class="attach-area">
+      <button type="button" id="reply-attach-btn" class="btn small">添加附件</button>
+      <span class="attach-hint">单文件 ≤ 50MB，随回复以附件发送</span>
+      <div id="reply-attach-list" class="attach-list" hidden></div>
+      <input type="file" id="reply-attach-input" multiple hidden>
+    </div>
     <label class="row"><input type="checkbox" id="reply-private"> 内部备注（仅运维可见）</label>
     <div class="dialog-actions">
       <button class="btn" data-close>取消</button>

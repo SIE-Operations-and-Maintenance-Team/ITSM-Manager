@@ -91,31 +91,62 @@ pub fn save_stored_cred(cred: state::StoredCred, app: AppHandle) -> Result<(), S
     Ok(())
 }
 
+/// 凭据诊断日志：追加到 exe 所在目录 login-cred.log（写失败静默，不影响主流程）
+fn cred_log(msg: &str) {
+    use std::io::Write;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let Some(dir) = exe.parent() else { return };
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("login-cred.log")) {
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
+
 /// 读账密（惰性迁移：keychain 无 + 明文有 → 迁移）。签名不变。
+/// 未取到凭据时记诊断日志，便于排查"回登录界面却没自动填充账密"。
 #[tauri::command]
 pub fn load_stored_cred(app: AppHandle) -> Option<state::StoredCred> {
-    let plaintext_exists = state::stored_cred_path(&app)
-        .map(|p| p.exists())
-        .unwrap_or(false);
+    let plaintext_path = state::stored_cred_path(&app);
+    let plaintext_exists = plaintext_path.as_ref().map(|p| p.exists()).unwrap_or(false);
+
+    // keychain_err：真实故障原因（NoEntry=从未保存，不算故障，不记）
+    let mut keychain_err: Option<String> = None;
     let keychain_cred = match Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER) {
-        Ok(e) => e.get_password().ok().and_then(|s| serde_json::from_str(&s).ok()),
-        Err(_) => None,
+        Ok(e) => match e.get_password() {
+            Ok(s) => match serde_json::from_str::<state::StoredCred>(&s) {
+                Ok(c) => Some(c),
+                Err(err) => {
+                    keychain_err = Some(format!("keychain 数据解析失败: {err}"));
+                    None
+                }
+            },
+            Err(err) => {
+                if !matches!(err, keyring::Error::NoEntry) {
+                    keychain_err = Some(format!("keychain 读取失败: {err}"));
+                }
+                None
+            }
+        },
+        Err(err) => {
+            keychain_err = Some(format!("keychain 入口创建失败: {err}"));
+            None
+        }
     };
     let keychain_exists = keychain_cred.is_some();
 
-    match decide_migration(plaintext_exists, keychain_exists) {
+    let cred = match decide_migration(plaintext_exists, keychain_exists) {
         MigrationAction::None => keychain_cred,
         MigrationAction::DeletePlaintext => {
             // keychain 已有，明文是残留 → 删
-            if let Some(p) = state::stored_cred_path(&app) {
-                let _ = std::fs::remove_file(&p);
+            if let Some(p) = &plaintext_path {
+                let _ = std::fs::remove_file(p);
             }
             keychain_cred
         }
         MigrationAction::Migrate => {
             // 读明文 → 写 keychain → 删明文；写失败则降级返明文凭据（保留文件）
-            let cred = state::stored_cred_path(&app).and_then(|p| {
-                std::fs::read_to_string(&p)
+            let cred = plaintext_path.as_ref().and_then(|p| {
+                std::fs::read_to_string(p)
                     .ok()
                     .and_then(|s| serde_json::from_str::<state::StoredCred>(&s).ok())
             });
@@ -125,15 +156,22 @@ pub fn load_stored_cred(app: AppHandle) -> Option<state::StoredCred> {
                     .and_then(|e| serde_json::to_string(&c).ok().and_then(|j| e.set_password(&j).ok()))
                     .is_some();
                 if written {
-                    if let Some(p) = state::stored_cred_path(&app) {
-                        let _ = std::fs::remove_file(&p);
+                    if let Some(p) = &plaintext_path {
+                        let _ = std::fs::remove_file(p);
                     }
                 }
                 return Some(c);
             }
             None
         }
+    };
+    if cred.is_none() {
+        let reason = keychain_err
+            .or_else(|| plaintext_exists.then(|| "明文迁移失败：文件存在但读取/解析失败".to_string()))
+            .unwrap_or_else(|| "无保存凭据（keychain 与明文均不存在）".to_string());
+        cred_log(&reason);
     }
+    cred
 }
 
 /// 清账密（登出/取消记住密码）。签名不变。
