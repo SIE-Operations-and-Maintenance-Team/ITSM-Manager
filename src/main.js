@@ -990,9 +990,16 @@ function renderDetail(d, replies) {
   html += `<h4>回复记录 (${replies.length})</h4>`;
   if (replies.length === 0) html += '<div class="detail-empty">暂无回复</div>';
   replies.forEach(r => {
+    // ITSM 附件在回复的独立 fileList 字段（不在正文 HTML 内），需单独渲染
+    const filesHtml = (r.fileList || []).map(f => `
+      <a class="attach-item attach-link" href="${esc(f.filePath)}" data-url="${esc(f.filePath)}" title="点击下载：${esc(f.sourceFileName)}">
+        <span class="attach-name">📎 ${esc(f.sourceFileName || f.phyFileName || '附件')}</span>
+        <span class="attach-size">${f.fileSize ? fmtSize(f.fileSize) : ''}</span>
+      </a>`).join('');
     html += `<div class="reply-item ${r.isPrivate ? 'internal' : ''}">
       <div class="reply-meta">${esc(r.userName || r.createdByName || r.createdBy || '系统')} · ${fmt(r.replyTime || r.creationDate)}${r.isPrivate ? ' · 内部' : ''}</div>
-      <div class="reply-content">${sanitizeHtml(r.detail)}</div></div>`;
+      <div class="reply-content">${sanitizeHtml(r.detail)}</div>
+      ${filesHtml ? `<div class="attach-list reply-attachments">${filesHtml}</div>` : ''}</div>`;
   });
   pane.innerHTML = html;
   pane.querySelectorAll('button[data-act]').forEach(btn => {
@@ -2053,6 +2060,14 @@ $('settings-submit').addEventListener('click', async () => {
 initResizer();
 enableResizableDialogs();
 initImagePreview();
+// 历史回复附件点击 → 系统默认浏览器下载（filePath 自带 ?attname= 保存名）。
+// renderDetail 每次 innerHTML 重建，与图片预览同用 detail-pane 事件委托
+$('detail-pane').addEventListener('click', e => {
+  const link = e.target.closest('a.attach-link');
+  if (!link) return;
+  e.preventDefault();
+  invoke('open_external_url', { url: link.dataset.url }).catch(err => toast('打开附件失败: ' + err, 'error'));
+});
 applyDetailWidth();
 initSearchUI();
 init();

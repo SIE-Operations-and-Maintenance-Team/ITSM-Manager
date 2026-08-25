@@ -182,6 +182,11 @@ dialog .rich-editor { margin-top: 4px; }
 .attach-size, .attach-status { flex: none; color: var(--muted); }
 .attach-status.ok { color: var(--success); }
 .attach-status.error { color: var(--danger); cursor: help; }
+/* 详情面板历史回复附件（<a> 形态，点击经系统浏览器下载） */
+.reply-attachments { margin-top: 4px; }
+.attach-link { text-decoration: none; color: inherit; cursor: pointer; }
+.attach-link:hover { border-color: var(--primary); }
+.attach-link:hover .attach-name { color: var(--primary); text-decoration: underline; }
 
 /* ============ 设置弹窗：侧栏分组 ============ */
 /* 覆盖 .dialog-wide 的 820，单独定 900；最小宽 700 / 最小高 480 */

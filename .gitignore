@@ -18,6 +18,7 @@ docs/*
 doc/*
 .playwright-mcp/*
 
+AGENTS.md
 CLAUDE.md
 paseo.json
 codegraph.json
