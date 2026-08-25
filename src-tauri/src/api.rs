@@ -267,6 +267,40 @@ pub async fn upload_attachment(
     parse_upload_response(&v)
 }
 
+/// 下载文件到本地：GET → 非 2xx 报错 → 写 `<dest>.part` → rename（防半截文件）。
+/// 文件服务（gushen-itsm）公开，不带 authorization。
+pub async fn download_file(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    let resp = client
+        .get(url)
+        .header("language", "zh#cn")
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("下载失败: HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("读取响应失败: {}", e))?;
+    let mut tmp = dest.as_os_str().to_os_string();
+    tmp.push(".part");
+    let tmp = std::path::PathBuf::from(tmp);
+    // 写盘 + rename 放 blocking 线程：附件上限 50MB，避免占用 async worker
+    let dest = dest.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("写盘失败: {}", e))?;
+        if let Err(e) = std::fs::rename(&tmp, &dest) {
+            let _ = std::fs::remove_file(&tmp); // rename 失败清理半截临时文件
+            return Err(format!("保存失败: {}", e));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("下载任务异常: {}", e))?
+}
+
 /// 纯构造：回复请求 body（便于单测）
 pub fn reply_body(
     order_id: &str,
@@ -625,6 +659,54 @@ pub async fn fetch_tickets_raw(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ============ download_file：本地 axum mock server ============
+
+    async fn spawn_download_server() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new()
+            .route("/file", axum::routing::get(|| async { "attachment-bytes-你好" }))
+            .route("/missing", axum::routing::get(|| async { axum::http::StatusCode::NOT_FOUND }));
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), task)
+    }
+
+    fn temp_dest(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("itsm-dl-test-{}-{}.bin", std::process::id(), tag))
+    }
+
+    #[tokio::test]
+    async fn download_file_writes_content_and_leaves_no_part() {
+        let (base, _task) = spawn_download_server().await;
+        let dest = temp_dest("ok");
+        let client = reqwest::Client::new();
+        download_file(&client, &format!("{base}/file"), &dest).await.unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), "attachment-bytes-你好".as_bytes().to_vec());
+        assert!(!dest.with_file_name(format!("{}.part", dest.file_name().unwrap().to_string_lossy())).exists(), "rename 后不应残留 .part");
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[tokio::test]
+    async fn download_file_http_error_reports_status() {
+        let (base, _task) = spawn_download_server().await;
+        let dest = temp_dest("404");
+        let client = reqwest::Client::new();
+        let err = download_file(&client, &format!("{base}/missing"), &dest).await.unwrap_err();
+        assert!(err.contains("404"), "错误信息应含 HTTP 状态码: {err}");
+        assert!(!dest.exists(), "失败时不应写出目标文件");
+    }
+
+    #[tokio::test]
+    async fn download_file_connection_failure_is_error() {
+        // 端口几乎不可能有服务：直连失败 → Err 含"请求失败"。
+        // 用 no_proxy client：本机系统代理会把连不上的目标代答成 502，测不到连接错误
+        let dest = temp_dest("conn");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = download_file(&client, "http://127.0.0.1:1/x", &dest).await.unwrap_err();
+        assert!(err.contains("请求失败"), "错误信息应为请求失败: {err}");
+        assert!(!dest.exists());
+    }
 
     #[test]
     fn search_params_empty_when_all_blank() {

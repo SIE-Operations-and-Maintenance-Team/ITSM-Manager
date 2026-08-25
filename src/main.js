@@ -992,7 +992,7 @@ function renderDetail(d, replies) {
   replies.forEach(r => {
     // ITSM 附件在回复的独立 fileList 字段（不在正文 HTML 内），需单独渲染
     const filesHtml = (r.fileList || []).map(f => `
-      <a class="attach-item attach-link" href="${esc(f.filePath)}" data-url="${esc(f.filePath)}" title="点击下载：${esc(f.sourceFileName)}">
+      <a class="attach-item attach-link" href="${esc(f.filePath)}" data-url="${esc(f.filePath)}" data-name="${esc(f.sourceFileName || f.phyFileName || '附件')}" title="点击下载：${esc(f.sourceFileName)}">
         <span class="attach-name">📎 ${esc(f.sourceFileName || f.phyFileName || '附件')}</span>
         <span class="attach-size">${f.fileSize ? fmtSize(f.fileSize) : ''}</span>
       </a>`).join('');
@@ -1874,6 +1874,10 @@ async function openSettings() {
     mdSel.appendChild(o);
   });
   mdSel.value = cfg.mcp_default_seach_type ?? '';
+  // 附件下载配置回填
+  $('settings-attach-mode').value = cfg.attachment_download_mode === 'ask' ? 'ask' : 'auto';
+  $('settings-attach-dir').value = cfg.attachment_download_dir || '';
+  updateAttachDirRow();
   // 关于页：回填当前版本号
   $('about-version').textContent = 'v' + await invoke('get_app_version');
   // 复位到常规 tab（HTML 虽带默认 active，但上次切到的 tab 会保留，再开需复位）
@@ -2008,6 +2012,20 @@ $('settings-auto-login').addEventListener('change', async (e) => {
   }
 });
 
+// 附件下载：mode=ask 隐藏保存目录行；「浏览」原生目录选择框
+function updateAttachDirRow() {
+  $('settings-attach-dir-row').hidden = $('settings-attach-mode').value !== 'auto';
+}
+$('settings-attach-mode').addEventListener('change', updateAttachDirRow);
+$('settings-attach-dir-btn').addEventListener('click', async () => {
+  try {
+    const dir = await invoke('pick_directory');
+    if (dir) $('settings-attach-dir').value = dir;
+  } catch (e) {
+    toast('选择目录失败: ' + e, 'error');
+  }
+});
+
 $('settings-btn').addEventListener('click', openSettings);
 
 $('settings-submit').addEventListener('click', async () => {
@@ -2045,6 +2063,8 @@ $('settings-submit').addEventListener('click', async () => {
         mcp_enabled: mcp_enabled_new,
         mcp_port: mcp_port_new,
         mcp_default_seach_type: mcp_default_view_new,
+        attachment_download_mode: $('settings-attach-mode').value === 'ask' ? 'ask' : 'auto',
+        attachment_download_dir: $('settings-attach-dir').value.trim() || null,
       }
     });
     if (autostart_new !== cur.autostart_enabled) {
@@ -2060,13 +2080,28 @@ $('settings-submit').addEventListener('click', async () => {
 initResizer();
 enableResizableDialogs();
 initImagePreview();
-// 历史回复附件点击 → 系统默认浏览器下载（filePath 自带 ?attname= 保存名）。
+// 历史回复附件点击 → 应用内下载并用系统默认程序打开（位置按设置：固定目录 / 每次询问）。
 // renderDetail 每次 innerHTML 重建，与图片预览同用 detail-pane 事件委托
-$('detail-pane').addEventListener('click', e => {
+$('detail-pane').addEventListener('click', async e => {
   const link = e.target.closest('a.attach-link');
-  if (!link) return;
+  if (!link || link.classList.contains('busy')) return;
   e.preventDefault();
-  invoke('open_external_url', { url: link.dataset.url }).catch(err => toast('打开附件失败: ' + err, 'error'));
+  const name = link.dataset.name || '附件';
+  const sizeEl = link.querySelector('.attach-size');
+  const originText = sizeEl ? sizeEl.textContent : '';
+  link.classList.add('busy');
+  if (sizeEl) sizeEl.textContent = '下载中…';
+  try {
+    const r = await invoke('download_attachment', { url: link.dataset.url, fileName: name });
+    if (!r.canceled) {
+      toast(r.opened ? `已下载并打开：${name}` : `已下载：${name}（${r.path}）`, 'success');
+    }
+  } catch (err) {
+    toast('下载附件失败: ' + err, 'error');
+  } finally {
+    link.classList.remove('busy');
+    if (sizeEl) sizeEl.textContent = originText;
+  }
 });
 applyDetailWidth();
 initSearchUI();

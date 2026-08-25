@@ -117,6 +117,24 @@
             </label>
             <div class="set-desc">与顶部下拉一致；暂停刷新用顶部"不刷新"</div>
           </div>
+          <div class="set-group">
+            <h5>附件下载</h5>
+            <label class="set-row" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span>下载位置</span>
+              <select id="settings-attach-mode">
+                <option value="auto">自动保存到固定目录</option>
+                <option value="ask">每次下载时询问</option>
+              </select>
+            </label>
+            <label class="set-row" id="settings-attach-dir-row" style="flex-direction:column;align-items:stretch;gap:4px">
+              <span>保存目录</span>
+              <div class="attach-dir-pick">
+                <input id="settings-attach-dir" type="text" placeholder="系统「下载」目录" readonly>
+                <button type="button" id="settings-attach-dir-btn" class="btn small">浏览</button>
+              </div>
+            </label>
+            <div class="set-desc">点击工单附件即下载并自动用系统默认程序打开；同名文件自动加 (n) 后缀，不覆盖已有文件</div>
+          </div>
         </section>
         <section data-pane="views">
           <div class="set-group">

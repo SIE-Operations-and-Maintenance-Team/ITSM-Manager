@@ -244,6 +244,7 @@ pub fn run() {
     }));
     builder
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -340,6 +341,8 @@ pub fn run() {
             commands::save_detail_width,
             commands::get_app_version,
             commands::open_external_url,
+            commands::download_attachment,
+            commands::pick_directory,
             open_login,
             login_auto,
             commands::verify_token,

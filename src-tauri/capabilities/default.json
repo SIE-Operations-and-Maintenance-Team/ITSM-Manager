@@ -8,6 +8,7 @@
     "core:event:default",
     "autostart:default",
     "notification:default",
+    "dialog:default",
     "updater:default"
   ]
 }

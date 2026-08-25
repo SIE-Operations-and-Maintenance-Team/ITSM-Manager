@@ -524,6 +524,120 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     }
 }
 
+// ============================ 附件下载 ============================
+
+/// 清理 Windows 文件名非法字符（替换为 _）；结尾的点也去掉；空名回退 attachment
+fn sanitize_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches('.').to_string();
+    if cleaned.is_empty() { "attachment".into() } else { cleaned }
+}
+
+/// 目录内防冲突：同名存在时追加 " (n)"（保扩展名）
+fn unique_dest(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let stem = first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = first.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    for n in 1.. {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+/// 用系统默认程序打开本地文件。成功与否返回 bool（打开失败不算下载失败，前端据 path 提示）
+fn open_local_file(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let p = path.as_os_str().to_string_lossy().into_owned();
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &p])
+            .spawn()
+            .is_ok()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// 下载工单附件到本地并（成功后）用系统默认程序打开。
+/// 目标位置按配置：mode="ask" 每次弹保存框（取消返回 canceled=true）；
+/// mode="auto" 固定目录（attachment_download_dir，无效/未配回退系统下载目录），同名自动加 " (n)"。
+#[tauri::command]
+pub async fn download_attachment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    file_name: String,
+) -> Result<Value, String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("仅支持 http/https 链接".into());
+    }
+    let cfg = config::load(&app, state::DEFAULT_SEACH_TYPE);
+    let file_name = sanitize_file_name(&file_name);
+
+    let dest = if cfg.attachment_download_mode == "ask" {
+        // blocking dialog 不能在主线程，async 命令里也统一放 spawn_blocking
+        use tauri_plugin_dialog::DialogExt;
+        let app2 = app.clone();
+        let name2 = file_name.clone();
+        let picked = tokio::task::spawn_blocking(move || {
+            app2.dialog().file().set_file_name(name2).blocking_save_file()
+        })
+        .await
+        .map_err(|e| format!("保存对话框异常: {}", e))?;
+        match picked {
+            Some(p) => p.into_path().map_err(|e| format!("所选路径无效: {}", e))?,
+            None => return Ok(json!({ "canceled": true })),
+        }
+    } else {
+        let dir = match cfg.attachment_download_dir.as_ref().map(std::path::PathBuf::from) {
+            Some(d) if d.is_dir() => d,
+            _ => app
+                .path()
+                .download_dir()
+                .map_err(|e| format!("无法定位下载目录: {}", e))?,
+        };
+        unique_dest(&dir, &file_name)
+    };
+
+    api::download_file(&state.client, &url, &dest).await?;
+    let opened = open_local_file(&dest);
+    Ok(json!({
+        "canceled": false,
+        "path": dest.to_string_lossy(),
+        "opened": opened,
+    }))
+}
+
+/// 设置页「浏览」选附件下载目录；取消返回 None
+#[tauri::command]
+pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(|e| format!("目录对话框异常: {}", e))?;
+    match picked {
+        Some(p) => Ok(Some(
+            p.into_path()
+                .map_err(|e| format!("所选目录无效: {}", e))?
+                .to_string_lossy()
+                .into_owned(),
+        )),
+        None => Ok(None),
+    }
+}
+
 // ============================ 版本更新 ============================
 
 /// 检查更新结果（前端据此决定是否弹更新提示）

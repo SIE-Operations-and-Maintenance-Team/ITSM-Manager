@@ -70,12 +70,19 @@ pub struct Config {
     /// 启用自动登录（依赖已存账密）。默认关——用户主动开。
     #[serde(default)]
     pub auto_login_enabled: bool,
+    /// 附件下载模式："auto"=固定目录（attachment_download_dir，缺省系统下载目录）；"ask"=每次弹保存框。
+    #[serde(default = "default_attachment_download_mode")]
+    pub attachment_download_mode: String,
+    /// auto 模式的附件下载目录；None = 系统下载目录
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_download_dir: Option<String>,
 }
 
 fn default_true() -> bool { true }
 fn default_last_interval() -> u64 { DEFAULT_INTERVAL }
 fn default_mcp_port() -> u16 { DEFAULT_MCP_PORT }
 fn default_mcp_seach_type() -> i64 { DEFAULT_MCP_SEACH_TYPE }
+fn default_attachment_download_mode() -> String { "auto".into() }
 
 impl Config {
     pub fn default_with(seach_type: i64) -> Self {
@@ -100,6 +107,8 @@ impl Config {
             mcp_port: DEFAULT_MCP_PORT,
             mcp_default_seach_type: DEFAULT_MCP_SEACH_TYPE,
             auto_login_enabled: false,
+            attachment_download_mode: default_attachment_download_mode(),
+            attachment_download_dir: None,
         }
     }
 
@@ -125,6 +134,11 @@ impl Config {
         if seach_type >= 1 { seach_type } else { DEFAULT_MCP_SEACH_TYPE }
     }
 
+    /// 附件下载模式仅允许 auto/ask；非法值回退 auto
+    pub fn clamp_attachment_download_mode(mode: String) -> String {
+        if mode == "ask" { "ask".into() } else { "auto".into() }
+    }
+
     pub fn clamp_detail_width(pct: Option<f64>) -> Option<f64> {
         pct.map(|p| p.clamp(20.0, 70.0))
     }
@@ -142,6 +156,7 @@ impl Config {
             last_interval_sec: Self::clamp_interval(self.last_interval_sec).max(MIN_INTERVAL),
             mcp_port: Self::clamp_mcp_port(self.mcp_port),
             mcp_default_seach_type: Self::clamp_mcp_seach_type(self.mcp_default_seach_type),
+            attachment_download_mode: Self::clamp_attachment_download_mode(self.attachment_download_mode.clone()),
             ..self
         }.dedup()
     }
@@ -212,20 +227,20 @@ mod tests {
 
     #[test]
     fn dedup_removes_duplicates_sorted() {
-        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.dedup();
+        let c = Config { whitelist: vec![3, 1, 2, 1, 3], interval_sec: 300, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false, attachment_download_mode: "auto".into(), attachment_download_dir: None }.dedup();
         assert_eq!(c.whitelist, vec![1, 2, 3]);
     }
 
     #[test]
     fn normalize_clamps_and_dedups() {
-        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false }.normalize();
+        let c = Config { whitelist: vec![2, 2, 1], interval_sec: 5, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false, attachment_download_mode: "auto".into(), attachment_download_dir: None }.normalize();
         assert_eq!(c.whitelist, vec![1, 2]);
         assert_eq!(c.interval_sec, 30);
     }
 
     #[test]
     fn serialize_deserialize_roundtrip() {
-        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false };
+        let c = Config { whitelist: vec![1, 2], interval_sec: 300, default_service_l1: None, default_service_l2: None, default_service_l3: None, default_support_group_id: None, default_support_group_name: None, view_page_sizes: HashMap::new(), detail_width_pct: None, autostart_enabled: false, minimize_to_tray: true, tray_hint_shown: false, last_interval_sec: 300, auto_claim_enabled: false, auto_claim_seach_type: None, auto_claim_notify: false, mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7, auto_login_enabled: false, attachment_download_mode: "auto".into(), attachment_download_dir: None };
         let s = serde_json::to_string(&c).unwrap();
         let c2: Config = serde_json::from_str(&s).unwrap();
         assert_eq!(c, c2);
@@ -277,6 +292,8 @@ mod tests {
             auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
+            attachment_download_mode: "auto".into(),
+            attachment_download_dir: None,
         }.normalize();
         assert_eq!(c.detail_width_pct, Some(20.0));
     }
@@ -306,6 +323,8 @@ mod tests {
             auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
+            attachment_download_mode: "auto".into(),
+            attachment_download_dir: None,
         };
         assert_eq!(base().normalize().last_interval_sec, 30, "0 -> 最小 30");
         let mut c = base(); c.last_interval_sec = 5;
@@ -327,6 +346,8 @@ mod tests {
             auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
+            attachment_download_mode: "auto".into(),
+            attachment_download_dir: None,
         };
         c = c.normalize();
         assert_eq!(c.interval_sec, 0, "interval 0 = 暂停，保留");
@@ -346,6 +367,8 @@ mod tests {
             auto_claim_notify: false,
             mcp_enabled: true, mcp_port: 17540, mcp_default_seach_type: 7,
             auto_login_enabled: false,
+            attachment_download_mode: "auto".into(),
+            attachment_download_dir: None,
         };
         // 暂停：记 last=300，interval->0
         c = c.toggled_pause();
@@ -506,5 +529,43 @@ mod tests {
         let mut c2 = Config::default_with(2);
         c2.auto_claim_notify = false;
         assert!(!c2.normalize().auto_claim_notify);
+    }
+
+    #[test]
+    fn default_with_attachment_download_auto_and_no_dir() {
+        let c = Config::default_with(2);
+        assert_eq!(c.attachment_download_mode, "auto");
+        assert_eq!(c.attachment_download_dir, None);
+    }
+
+    #[test]
+    fn legacy_config_defaults_attachment_download() {
+        let legacy = r#"{"whitelist":[2],"interval_sec":300}"#;
+        let c: Config = serde_json::from_str(legacy).unwrap();
+        assert_eq!(c.attachment_download_mode, "auto");
+        assert_eq!(c.attachment_download_dir, None);
+    }
+
+    #[test]
+    fn clamp_attachment_download_mode_only_auto_or_ask() {
+        assert_eq!(Config::clamp_attachment_download_mode("auto".into()), "auto");
+        assert_eq!(Config::clamp_attachment_download_mode("ask".into()), "ask");
+        assert_eq!(Config::clamp_attachment_download_mode("AUTO".into()), "auto", "大小写敏感，非法回退 auto");
+        assert_eq!(Config::clamp_attachment_download_mode("whatever".into()), "auto");
+        assert_eq!(Config::clamp_attachment_download_mode(String::new()), "auto");
+    }
+
+    #[test]
+    fn normalize_repairs_invalid_attachment_download_mode() {
+        let mut c = Config::default_with(2);
+        c.attachment_download_mode = "manual".into();
+        assert_eq!(c.normalize().attachment_download_mode, "auto");
+    }
+
+    #[test]
+    fn normalize_preserves_attachment_download_dir() {
+        let mut c = Config::default_with(2);
+        c.attachment_download_dir = Some("D:/downloads".into());
+        assert_eq!(c.normalize().attachment_download_dir, Some("D:/downloads".into()));
     }
 }

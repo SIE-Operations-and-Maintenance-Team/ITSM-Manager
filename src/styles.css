@@ -187,6 +187,11 @@ dialog .rich-editor { margin-top: 4px; }
 .attach-link { text-decoration: none; color: inherit; cursor: pointer; }
 .attach-link:hover { border-color: var(--primary); }
 .attach-link:hover .attach-name { color: var(--primary); text-decoration: underline; }
+.attach-link.busy { pointer-events: none; opacity: 0.55; }
+.attach-link.busy .attach-size { color: var(--muted); }
+/* 设置：附件下载目录选择行 */
+.attach-dir-pick { display: flex; gap: 6px; }
+.attach-dir-pick input { flex: 1; min-width: 0; }
 
 /* ============ 设置弹窗：侧栏分组 ============ */
 /* 覆盖 .dialog-wide 的 820，单独定 900；最小宽 700 / 最小高 480 */
