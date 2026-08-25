@@ -1,7 +1,7 @@
 {
   "name": "itsm-manager",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "module",
   "description": "ITSM 工单管理工具（Tauri 前端占位，实际构建由 src-tauri 处理）",
   "scripts": {
