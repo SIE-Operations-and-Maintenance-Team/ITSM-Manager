@@ -20,6 +20,12 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
         .parse()
         .map_err(|e| format!("URL 解析失败: {}", e))?;
     let login_url = "https://help.chinasie.com/login?redirect=/maintenance";
+    // 复用清理：上次登录窗口滞留（如验证码未处理、超时未关）时，同 label 二次 build 会失败。
+    // close 异步销毁，稍等片刻再 build，避免 label 冲突。
+    if let Some(old) = app.get_webview_window("login") {
+        let _ = old.close();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
     let mut builder = WebviewWindowBuilder::new(&app, "login", tauri::WebviewUrl::External(url))
         .title("ITSM 登录")
         .inner_size(1000.0, 720.0)
@@ -144,6 +150,21 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
             {
                 let _ = win.eval(beacon);
             }
+        }
+    });
+
+    // 超时兜底：180s 内未拿到 beacon 回传（webview 挂起/页面改版/静默无响应）时，
+    // 关窗 + emit login-timeout，让前端复位自动登录状态机（否则 autoLoginMode 永久残留）。
+    // 手动外部登录同样适用：超时提示后用户可重新点"外部窗口登录"。
+    let app_to = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(180));
+        // 窗口仍在 = 登录未成功（/cb 成功路径会关窗）
+        if app_to.get_webview_window("login").is_some() {
+            if let Some(w) = app_to.get_webview_window("login") {
+                let _ = w.close();
+            }
+            let _ = app_to.emit("login-timeout", ());
         }
     });
 
