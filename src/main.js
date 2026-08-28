@@ -489,7 +489,14 @@ listen('login-success', (ev) => {
   autoLoginMode = null;   // 复位（成功结束）
   autoLoginGaveUpAt = 0;
 
-  if (mode === 'silent-runtime' || mode === 'silent-boot') {
+  if (mode === 'silent-boot') {
+    // 开机自启静默成功：主窗口虽隐藏，但 DOM 仍停在初始登录屏——先切主屏，
+    // 用户打开窗口时看到的才是主界面；刷新逻辑与 silent-runtime 相同
+    showMain(c);
+    invoke('trigger_refresh', {}).catch(() => {});  // seachType=None → restart loop
+    return;
+  }
+  if (mode === 'silent-runtime') {
     // 静默：不切屏、不 toast；写回 token 由后端 save_creds_internal 已做；
     // restart scheduler 全白名单刷新（失效前那次拉取失败，含当前视图）
     setTip('');
@@ -522,6 +529,16 @@ listen('login-timeout', () => {
   autoLoginMode = null;   // 超时=非确定性失败：复位放行后续 need-login，不进冷却
   if (mode === 'startup' || mode === null) {
     setTip('登录超时，请重试', true);
+    $('login-btn').disabled = false;
+  }
+  // silent-*：不切屏，等下一轮 need-login 自动再试
+});
+listen('login-aborted', () => {
+  const mode = autoLoginMode;
+  if (mode === null && $('login-screen').hidden) return;   // 同 timeout 幂等防护：登录已成功则忽略
+  autoLoginMode = null;   // 登录窗被用户关闭=非确定性放弃：复位放行后续 need-login，不进冷却
+  if (mode === 'startup' || mode === null) {
+    setTip('登录窗口已关闭，请重试', true);
     $('login-btn').disabled = false;
   }
   // silent-*：不切屏，等下一轮 need-login 自动再试
@@ -575,6 +592,9 @@ $('logout-btn').addEventListener('click', async () => {
   currentPage = 1;
   currentFetchedAt = null;
   currentIsSearch = false;
+  // 用户主动登出=本会话放弃自动登录：置"永久冷却"挡住 scheduler 下轮 need-login 自动登回。
+  // 手动登录成功（doLogin）会复位为 0；不改持久配置（auto_login_enabled 保持用户设置）
+  autoLoginGaveUpAt = Number.MAX_SAFE_INTEGER;
   showLogin();
 });
 

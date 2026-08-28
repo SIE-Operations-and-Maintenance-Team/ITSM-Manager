@@ -11,10 +11,22 @@ mod tray;
 use state::{AppState, Creds};
 use tauri::{Emitter, Listener, Manager};
 
+/// 登录窗口跨线程状态（static：17539 server 线程可能跨窗口存活，无法按窗口传引用）。
+/// WebviewWindow 的 PartialEq 仅按 label 比较、无实例 id，用代数区分新旧窗口。
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+static LOGIN_GEN: AtomicU64 = AtomicU64::new(0); // 当前登录窗口代数（open_login 开头先换代再关旧窗）
+static LOGIN_OK: AtomicBool = AtomicBool::new(false); // 本次登录已成功（/cb 置 true）
+static LOGIN_NOTIFIED: AtomicBool = AtomicBool::new(false); // timeout/aborted 恰好通知一次
+
 /// 打开登录窗口（嵌入 ITSM 登录页，通过本地 HTTP server + image beacon 回传 token）
 #[tauri::command]
 async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), String> {
     let visible = visible.unwrap_or(true); // 默认显示（手动登录）；login_auto 传 false 隐藏
+    // 先换代数并复位状态，再关旧窗：旧窗的 Destroyed 处理看到代数不匹配会静默，
+    // 避免复用清理误发 login-aborted 干扰新一轮登录
+    let my_gen = LOGIN_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    LOGIN_OK.store(false, Ordering::SeqCst);
+    LOGIN_NOTIFIED.store(false, Ordering::SeqCst);
     use tauri::webview::WebviewWindowBuilder;
     let url: tauri::Url = "https://help.chinasie.com/login?redirect=/maintenance"
         .parse()
@@ -88,6 +100,7 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
                 }
                 let token = t.trim_matches('"').to_string();
                 if token.len() > 20 {
+                    LOGIN_OK.store(true, Ordering::SeqCst);
                     let creds = Creds {
                         token,
                         tenant_id: if ti.is_empty() { state::DEFAULT_TENANT.into() } else { ti },
@@ -111,6 +124,9 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
                         }
                     }
                 }
+                // 失败已通知：置 LOGIN_NOTIFIED 抑制随后关窗触发的 login-aborted，
+                // 否则前端 aborted 监听会覆盖 login-failed 刚显示的失败原因
+                LOGIN_NOTIFIED.store(true, Ordering::SeqCst);
                 let _ = app_srv.emit("login-failed", msg);
                 if let Some(w) = app_srv.get_webview_window("login") {
                     let _ = w.close();
@@ -161,17 +177,29 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
     // 手关/超时前重开新窗都会先销毁本窗）后旧超时线程不再动作，避免误关新窗、误发事件。
     let destroyed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let destroyed_flag = destroyed.clone();
+    let app_evt = app.clone();
     win.on_window_event(move |e| {
         if matches!(e, tauri::WindowEvent::Destroyed) {
             destroyed_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            // 本窗销毁且未登录成功（用户手关验证码窗等）→ emit login-aborted 让前端复位。
+            // 代数不匹配（已被新窗替换）或已成功/已通知 → 静默。
+            if LOGIN_GEN.load(Ordering::SeqCst) == my_gen
+                && !LOGIN_OK.load(Ordering::SeqCst)
+                && !LOGIN_NOTIFIED.swap(true, Ordering::SeqCst)
+            {
+                let _ = app_evt.emit("login-aborted", ());
+            }
         }
     });
     let win_created = win.clone();
     let app_to = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(180));
-        // 本窗未销毁 = 登录未成功（/cb 成功路径会关窗触发 Destroyed）
-        if !destroyed.load(std::sync::atomic::Ordering::SeqCst) {
+        // 本窗未销毁、仍是当前代（未被重开替换）且未通知过 → 超时关窗 + emit login-timeout
+        if !destroyed.load(std::sync::atomic::Ordering::SeqCst)
+            && LOGIN_GEN.load(std::sync::atomic::Ordering::SeqCst) == my_gen
+            && !LOGIN_NOTIFIED.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
             let _ = win_created.close();
             let _ = app_to.emit("login-timeout", ());
         }
