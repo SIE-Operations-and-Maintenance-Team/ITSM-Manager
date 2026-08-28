@@ -517,8 +517,8 @@ listen('login-success', (ev) => {
   toast('登录成功', 'success');
 });
 listen('login-timeout', () => {
-  if ($('login-screen').hidden) return;   // 登录已成功回主屏：忽略迟到超时（与 login-success 同帧竞争的幂等防护）
   const mode = autoLoginMode;
+  if (mode === null && $('login-screen').hidden) return;   // mode 已复位且回主屏 = login-success 刚成功：忽略迟到超时
   autoLoginMode = null;   // 超时=非确定性失败：复位放行后续 need-login，不进冷却
   if (mode === 'startup' || mode === null) {
     setTip('登录超时，请重试', true);
@@ -532,14 +532,17 @@ listen('login-failed', async (ev) => {
   autoLoginMode = null;
   autoLoginGaveUpAt = Date.now();   // 确定性失败：进入冷却（10 分钟后 need-login 可再试）
   if (mode === 'silent-boot') {
+    // 开机自启静默：不弹窗，发通知；主窗口保持隐藏
     invoke('send_system_notification', {
       title: 'ITSM 管理工具', body: '自动登录失败：' + msg + '，请打开应用手动登录'
     }).catch(() => {});
   } else if (mode === 'silent-runtime') {
+    // 运行中静默：切登录页 fallback（主窗口可见）
     await showLogin();          // await 后 setTip 才不会被 showLogin 内部 setTip('') 覆盖
     setTip(msg, true);
     $('login-btn').disabled = false;
   } else {
+    // startup / null（手动）：停登录页 tip
     setTip(msg, true);
     $('login-btn').disabled = false;
   }
