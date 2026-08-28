@@ -24,8 +24,11 @@ let currentIsSearch = false;   // 当前列表是否搜索结果
 let viewStates = new Map();    // seachType -> ViewState（per-view 内存快照）
 // 自动登录模式标记：null=手动；'startup'=启动过渡；'silent-boot'=开机自启静默；'silent-runtime'=运行中静默
 let autoLoginMode = null;
-// 自动登录确定性失败/验证码放弃标志：挡住后续 need-login 自动触发，避免循环
-let autoLoginGaveUp = false;
+// 自动登录确定性失败/验证码放弃标志：带 10 分钟冷却。
+// 旧实现一旦置 true 整个会话不再自动重登（重启才恢复），是"过期退出后不自动登录"的根因之一。
+let autoLoginGaveUpAt = 0;   // 0=未放弃；否则为放弃时刻 ms
+const GAVE_UP_COOLDOWN_MS = 10 * 60 * 1000;
+const gaveUpActive = () => autoLoginGaveUpAt > 0 && (Date.now() - autoLoginGaveUpAt) < GAVE_UP_COOLDOWN_MS;
 
 // 读取某视图持久化的 pageSize，未配置或非法回退 50
 async function getPageSizeFor(st) {
@@ -415,7 +418,7 @@ function showMain(creds) {
 // 登录（自建：账密 → login_auto 注入外部窗口自动填充）
 async function doLogin() {
   autoLoginMode = null;   // 手动登录：清除自动登录模式标记
-  autoLoginGaveUp = false; // 手动登录：重置放弃标志
+  autoLoginGaveUpAt = 0; // 手动登录：重置放弃标志
   const account = $('login-account').value.trim();
   const password = $('login-password').value;
   if (!account || !password) { setTip('请输入账号和密码', true); return; }
@@ -432,7 +435,7 @@ async function doLogin() {
 
 // 自动登录触发：mode ∈ {'startup','silent-boot','silent-runtime'}
 async function startAutoLogin(mode) {
-  if (autoLoginMode !== null || autoLoginGaveUp) return;   // 防抖 + 失败放弃
+  if (autoLoginMode !== null || gaveUpActive()) return;   // 防抖 + 冷却期内的失败放弃
   autoLoginMode = mode;   // 同步前置：关闭 await 窗口，防 need-login 抢入致 login_auto 并发
   const stored = await invoke('load_stored_cred');
   if (!stored || !stored.account) {
@@ -484,7 +487,7 @@ listen('login-success', (ev) => {
   if (!c || !c.token) return;
   const mode = autoLoginMode;
   autoLoginMode = null;   // 复位（成功结束）
-  autoLoginGaveUp = false;
+  autoLoginGaveUpAt = 0;
 
   if (mode === 'silent-runtime' || mode === 'silent-boot') {
     // 静默：不切屏、不 toast；写回 token 由后端 save_creds_internal 已做；
@@ -513,24 +516,30 @@ listen('login-success', (ev) => {
   showMain(c);
   toast('登录成功', 'success');
 });
-listen('login-timeout', () => { setTip('登录超时，请重试', true); });
-listen('login-failed', (ev) => {
+listen('login-timeout', () => {
+  if ($('login-screen').hidden) return;   // 登录已成功回主屏：忽略迟到超时（与 login-success 同帧竞争的幂等防护）
+  const mode = autoLoginMode;
+  autoLoginMode = null;   // 超时=非确定性失败：复位放行后续 need-login，不进冷却
+  if (mode === 'startup' || mode === null) {
+    setTip('登录超时，请重试', true);
+    $('login-btn').disabled = false;
+  }
+  // silent-*：不切屏，等下一轮 need-login 自动再试
+});
+listen('login-failed', async (ev) => {
   const msg = ev.payload || '登录失败';
   const mode = autoLoginMode;
   autoLoginMode = null;
-  autoLoginGaveUp = true;   // 确定性失败，挡住后续 need-login 自动触发
+  autoLoginGaveUpAt = Date.now();   // 确定性失败：进入冷却（10 分钟后 need-login 可再试）
   if (mode === 'silent-boot') {
-    // 开机自启静默：不弹窗，发通知；主窗口保持隐藏
     invoke('send_system_notification', {
       title: 'ITSM 管理工具', body: '自动登录失败：' + msg + '，请打开应用手动登录'
     }).catch(() => {});
   } else if (mode === 'silent-runtime') {
-    // 运行中静默：切登录页 fallback（主窗口可见）
-    showLogin();
+    await showLogin();          // await 后 setTip 才不会被 showLogin 内部 setTip('') 覆盖
     setTip(msg, true);
     $('login-btn').disabled = false;
   } else {
-    // startup / null（手动）：停登录页 tip
     setTip(msg, true);
     $('login-btn').disabled = false;
   }
@@ -541,7 +550,7 @@ listen('login-captcha', () => {
   if (mode === 'silent-boot') {
     // 开机自启静默：无法静默处理验证码 → 抑制 webview show + 发通知 + 放弃
     autoLoginMode = null;
-    autoLoginGaveUp = true;
+    autoLoginGaveUpAt = Date.now();
     invoke('send_system_notification', {
       title: 'ITSM 管理工具', body: '自动登录需要验证码，请打开应用手动登录'
     }).catch(() => {});
@@ -1789,7 +1798,7 @@ listen('need-login', async () => {
   if (autoLoginMode !== null) return;   // 静默登录进行中，防抖忽略
   let cfg = { auto_login_enabled: false };
   try { cfg = await invoke('get_config', { seachType: currentSeachType }); } catch (e) {}
-  if (cfg.auto_login_enabled && !autoLoginGaveUp) {
+  if (cfg.auto_login_enabled && !gaveUpActive()) {
     startAutoLogin('silent-runtime');
   } else {
     showLogin();   // 放弃过/未开启 → 手动登录页
