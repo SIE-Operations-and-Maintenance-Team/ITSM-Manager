@@ -156,14 +156,23 @@ async fn open_login(app: tauri::AppHandle, visible: Option<bool>) -> Result<(), 
     // 超时兜底：180s 内未拿到 beacon 回传（webview 挂起/页面改版/静默无响应）时，
     // 关窗 + emit login-timeout，让前端复位自动登录状态机（否则 autoLoginMode 永久残留）。
     // 手动外部登录同样适用：超时提示后用户可重新点"外部窗口登录"。
+    // 绑定本次创建的窗口实例：tauri 的 WebviewWindow PartialEq 仅按 label 比较（同 label
+    // 恒相等），无法区分新旧实例，改用 Destroyed 标志——本窗被关掉（登录成功关窗/用户
+    // 手关/超时前重开新窗都会先销毁本窗）后旧超时线程不再动作，避免误关新窗、误发事件。
+    let destroyed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let destroyed_flag = destroyed.clone();
+    win.on_window_event(move |e| {
+        if matches!(e, tauri::WindowEvent::Destroyed) {
+            destroyed_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+    let win_created = win.clone();
     let app_to = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(180));
-        // 窗口仍在 = 登录未成功（/cb 成功路径会关窗）
-        if app_to.get_webview_window("login").is_some() {
-            if let Some(w) = app_to.get_webview_window("login") {
-                let _ = w.close();
-            }
+        // 本窗未销毁 = 登录未成功（/cb 成功路径会关窗触发 Destroyed）
+        if !destroyed.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = win_created.close();
             let _ = app_to.emit("login-timeout", ());
         }
     });
@@ -241,7 +250,8 @@ fn save_creds_internal(app: &tauri::AppHandle, creds: Creds) {
             let _ = std::fs::write(p, s);
         }
     }
-    // 重登后重启 scheduler（若之前因 Auth 退出，这里唤醒）
+    // 重登后重启 scheduler：立即跑一轮刷新，并唤醒 interval=0 暂停的循环；
+    // 调度循环遇 Auth 只跳过本轮，token 更新后下一轮自动恢复。
     app.state::<commands::SchedulerHandle>()
         .0
         .restart(app.clone(), state::DEFAULT_SEACH_TYPE);
