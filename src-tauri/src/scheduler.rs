@@ -71,11 +71,10 @@ async fn run_loop(app: AppHandle, fallback_st: i64) {
     loop {
         let cfg: Config = crate::config::load(&app, fallback_st);
         for st in cfg.whitelist.clone() {
-            match refresh_single(&app, st).await {
-                None => consec_fail = 0,
-                Some(RefreshError::Auth) => return,
-                Some(RefreshError::Network) => consec_fail = 0,
-                Some(RefreshError::Server) => {
+            match loop_action(refresh_single(&app, st).await) {
+                LoopAction::Continue => consec_fail = 0,
+                LoopAction::Skip => break, // Auth：跳过本轮剩余视图，下一轮再试
+                LoopAction::Count => {
                     consec_fail += 1;
                     if should_alert(consec_fail) {
                         let _ = app.emit("refresh-failed", json!({"seachType": st}));
@@ -96,6 +95,22 @@ fn get_token_from_app(app: &AppHandle) -> Result<String, ()> {
     app.state::<AppState>().token.get().map_err(|_| ())
 }
 
+/// run_loop 单视图刷新结果 → 循环动作。Auth 不再终止 loop：跳过本轮剩余白名单
+/// （`Skip`），下一轮继续，保证 token 失效期间 need-login 每轮仍会触发。
+pub enum LoopAction {
+    Continue, // 正常，继续下一个视图
+    Skip,     // 跳过本轮剩余视图（Auth）
+    Count,    // Server 失败计数 +1
+}
+
+pub fn loop_action(r: Option<RefreshError>) -> LoopAction {
+    match r {
+        None | Some(RefreshError::Network) => LoopAction::Continue,
+        Some(RefreshError::Auth) => LoopAction::Skip,
+        Some(RefreshError::Server) => LoopAction::Count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +125,13 @@ mod tests {
     fn should_alert_at_and_above_threshold() {
         assert!(should_alert(3));
         assert!(should_alert(5));
+    }
+
+    #[test]
+    fn auth_skips_round_but_not_loop() {
+        assert!(matches!(loop_action(Some(RefreshError::Auth)), LoopAction::Skip));
+        assert!(matches!(loop_action(None), LoopAction::Continue));
+        assert!(matches!(loop_action(Some(RefreshError::Server)), LoopAction::Count));
+        assert!(matches!(loop_action(Some(RefreshError::Network)), LoopAction::Continue));
     }
 }
