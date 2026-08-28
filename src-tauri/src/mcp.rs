@@ -43,7 +43,7 @@ struct SearchByCodeParams {
     keyword: String,
     #[schemars(description = "页码，从 1 开始；省略时为 1")]
     page_index: Option<i64>,
-    #[schemars(description = "每页条数，范围 1..=200；省略时为 50")]
+    #[schemars(description = "每页条数，范围 1..=200；省略时为 20")]
     page_size: Option<i64>,
 }
 
@@ -55,7 +55,7 @@ struct SearchByCustomerGroupParams {
     keyword: String,
     #[schemars(description = "页码，从 1 开始；省略时为 1")]
     page_index: Option<i64>,
-    #[schemars(description = "每页条数，范围 1..=200；省略时为 50")]
+    #[schemars(description = "每页条数，范围 1..=200；省略时为 20")]
     page_size: Option<i64>,
 }
 
@@ -176,32 +176,127 @@ fn json_result(value: Value) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(value.to_string())])
 }
 
+/// 白名单裁剪通用函数：只保留指定键且跳过 null 值（null 对 agent 无信息量，徒耗 token）。
+fn keep_fields(obj: &serde_json::Map<String, Value>, keep: &[&str]) -> Value {
+    let mut m = serde_json::Map::new();
+    for &k in keep {
+        if let Some(v) = obj.get(k) {
+            if v.is_null() {
+                continue;
+            }
+            m.insert(k.to_string(), v.clone());
+        }
+    }
+    Value::Object(m)
+}
+
+/// 数组元素逐个按白名单裁剪；非数组输入返回空数组。
+fn keep_fields_array(value: &Value, keep: &[&str]) -> Value {
+    match value.as_array() {
+        Some(rows) => Value::Array(
+            rows.iter()
+                .map(|r| r.as_object().map(|o| keep_fields(o, keep)).unwrap_or_else(|| json!({})))
+                .collect(),
+        ),
+        None => Value::Array(vec![]),
+    }
+}
+
 /// get_detail 返回精简：从 get-with-fields 的 data 中只保留 agent 常用核心字段，
 /// 丢弃四套 *Fields 表单模板与 extField1-35。
 /// 注意：写操作（resolve/change_status）依赖完整 data 拼 update body，故裁剪只发生在
 /// 此 MCP 输出层，api.rs 不得改动。
+const DETAIL_KEEP: &[&str] = &[
+    "incidentId", "incidentCode", "orderSubject", "detail", "status", "statusName",
+    "priority", "priorityName", "effect", "effectName", "urgency",
+    "supportBy", "supportName", "requestor", "requestorName", "assign", "assignName",
+    "serviceFullName", "serviceTypeName", "serviceSubTypeName",
+    "incidentType", "incidentTypeName", "incidentSource", "incidentSourceName",
+    "contactCustomerGroup", "contactCustomerGroupName",
+    "creationDate", "lastUpdateDate", "firstResponseTime", "hopeResolvedTime",
+    "resolvedTime", "closeTime", "solution", "orderType", "tenantId", "phone", "email",
+];
+
 fn pick_detail_fields(v: &Value) -> Value {
-    const KEEP: &[&str] = &[
-        "incidentId", "incidentCode", "orderSubject", "detail", "status", "statusName",
-        "priority", "priorityName", "effect", "effectName", "urgency",
-        "supportBy", "supportName", "requestor", "requestorName", "assign", "assignName",
-        "serviceFullName", "serviceTypeName", "serviceSubTypeName",
-        "incidentType", "incidentTypeName", "incidentSource", "incidentSourceName",
-        "contactCustomerGroup", "contactCustomerGroupName",
-        "creationDate", "lastUpdateDate", "firstResponseTime", "hopeResolvedTime",
-        "resolvedTime", "closeTime", "solution", "orderType", "tenantId", "phone", "email",
-    ];
-    let obj = match v.get("data").and_then(|d| d.as_object()) {
-        Some(o) => o,
-        None => return json!({}),
-    };
-    let mut m = serde_json::Map::new();
-    for &k in KEEP {
-        if let Some(val) = obj.get(k) {
-            m.insert(k.to_string(), val.clone());
-        }
+    match v.get("data").and_then(|d| d.as_object()) {
+        Some(o) => keep_fields(o, DETAIL_KEEP),
+        None => json!({}),
     }
+}
+
+/// 搜索结果每行只留列表级核心字段；正文等大字段不留，需要时 agent 调 get_detail。
+const TICKET_ROW_KEEP: &[&str] = &[
+    "incidentId", "incidentCode", "orderSubject", "statusName", "priorityName",
+    "incidentTypeName", "serviceTypeName", "serviceSubTypeName",
+    "contactCustomerGroupName", "requestorName", "supportName", "assignName",
+    "creationDate", "lastUpdateDate", "hopeResolvedTime", "resolvedTime",
+];
+
+/// 历史回复只留回复人、时间、内容、是否内部备注。
+const REPLY_KEEP: &[&str] = &["userName", "replyTime", "detail", "isPrivate"];
+
+/// 视图：seachType / viewName / viewCount。
+const VIEW_KEEP: &[&str] = &["seachType", "viewName", "viewCount"];
+
+/// 支持组：sgId / supportGroupName。
+const SUPPORT_GROUP_KEEP: &[&str] = &["sgId", "supportGroupName"];
+
+/// 客户组：cgId / customerGroupName / companyName。
+const CUSTOMER_GROUP_KEEP: &[&str] = &["cgId", "customerGroupName", "companyName"];
+
+/// 人员：userId / psnName / depName / mail。
+const PERSON_KEEP: &[&str] = &["userId", "psnName", "depName", "mail"];
+
+/// 补单模板：只需 id（作 create_ticket 的 create_template_id）与模板名。
+const TEMPLATE_KEEP: &[&str] = &["id", "templateName"];
+
+/// 服务目录树节点（二级 serviceType 与三级 children 结构同构）：只留 stId/typeName/children。
+fn pick_service_node(o: &serde_json::Map<String, Value>) -> Value {
+    const NODE_KEEP: &[&str] = &["stId", "typeName"];
+    let children = match o.get("children").and_then(Value::as_array) {
+        Some(list) => Value::Array(
+            list.iter()
+                .map(|c| c.as_object().map(|co| keep_fields(co, NODE_KEEP)).unwrap_or_else(|| json!({})))
+                .collect(),
+        ),
+        None => Value::Array(vec![]),
+    };
+    let mut m = match keep_fields(o, NODE_KEEP) {
+        Value::Object(m) => m,
+        _ => unreachable!("keep_fields 必返回对象"),
+    };
+    m.insert("children".into(), children);
     Value::Object(m)
+}
+
+/// 服务目录树整体：一级 name → 二级节点递归裁剪。
+fn pick_service_tree(v: &Value) -> Value {
+    let picked = match v.get("data").and_then(Value::as_array) {
+        Some(list) => Value::Array(
+            list.iter()
+                .filter_map(|top| top.as_object())
+                .map(|t| {
+                    let service_types = t
+                        .get("serviceType")
+                        .and_then(Value::as_array)
+                        .map(|sts| {
+                            Value::Array(
+                                sts.iter().filter_map(|s| s.as_object()).map(pick_service_node).collect(),
+                            )
+                        })
+                        .unwrap_or_else(|| Value::Array(vec![]));
+                    let mut m = serde_json::Map::new();
+                    if let Some(name) = t.get("name").filter(|n| !n.is_null()) {
+                        m.insert("name".into(), name.clone());
+                    }
+                    m.insert("serviceType".into(), service_types);
+                    Value::Object(m)
+                })
+                .collect(),
+        ),
+        None => Value::Array(vec![]),
+    };
+    json!({ "data": picked })
 }
 
 fn required_text(field: &str, value: String) -> Result<String, McpError> {
@@ -295,7 +390,8 @@ fn build_replenish_params(
 
 fn pagination(page_index: Option<i64>, page_size: Option<i64>) -> Result<(i64, i64), McpError> {
     let page_index = page_index.unwrap_or(1);
-    let page_size = page_size.unwrap_or(50);
+    // 默认 20：兼顾覆盖与 token 消耗，不够时调用方显式传 page_size
+    let page_size = page_size.unwrap_or(20);
     if page_index < 1 {
         return Err(McpError::invalid_params("page_index 必须 >= 1", None));
     }
@@ -308,7 +404,7 @@ fn pagination(page_index: Option<i64>, page_size: Option<i64>) -> Result<(i64, i
 #[tool_router(server_handler)]
 impl ItsmHandler {
     #[tool(
-        description = "列出当前登录账号可用的工单视图。先调用本工具取得每个视图的 seachType，再调用搜索工具。",
+        description = "列出可用工单视图（seachType/viewName/viewCount），供搜索工具传 seach_type。",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -321,11 +417,13 @@ impl ItsmHandler {
         let value = api::list_views(&self.client, &token)
             .await
             .map_err(api_error)?;
-        Ok(json_result(value))
+        let empty = json!([]);
+        let rows = value.get("data").unwrap_or(&empty);
+        Ok(json_result(keep_fields_array(rows, VIEW_KEEP)))
     }
 
     #[tool(
-        description = "列出三级服务目录树：一级大类 → 二级 serviceType(stId) → 三级 children[](stId)。补单时取二级 stId 作 service_type、三级叶子 stId 作 service_sub_type。",
+        description = "三级服务目录树：大类 name → 二级 serviceType[]{stId,typeName,children} → 三级 children[]{stId,typeName}。补单取二级 stId 作 service_type、三级作 service_sub_type。",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
     )]
     async fn list_service_tree(&self) -> Result<CallToolResult, McpError> {
@@ -333,11 +431,11 @@ impl ItsmHandler {
         let value = api::list_service_tree(&self.client, &token)
             .await
             .map_err(api_error)?;
-        Ok(json_result(value))
+        Ok(json_result(pick_service_tree(&value)))
     }
 
     #[tool(
-        description = "按三级服务目录叶子 stId 取补单模板；返回的 data.id 作为 create_ticket 的 create_template_id。",
+        description = "按三级叶子 stId 取补单模板，返回 {id, templateName}，id 作 create_ticket 的 create_template_id。",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
     )]
     async fn get_replenish_template(
@@ -349,11 +447,15 @@ impl ItsmHandler {
         let value = api::get_replenish_template(&self.client, &token, &leaf_id)
             .await
             .map_err(api_error)?;
-        Ok(json_result(value))
+        let picked = match value.get("data").and_then(|d| d.as_object()) {
+            Some(o) => keep_fields(o, TEMPLATE_KEEP),
+            None => json!({}),
+        };
+        Ok(json_result(json!({ "data": picked })))
     }
 
     #[tool(
-        description = "按关键字模糊搜索客户组；返回 cgId 与 customerGroupName，作为 create_ticket 的 contact_customer_group / contact_customer_group_name。",
+        description = "按名称模糊搜索客户组，返回 cgId/customerGroupName/companyName（供 create_ticket）。",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
     )]
     async fn search_customer_groups(
@@ -365,11 +467,14 @@ impl ItsmHandler {
         let value = api::search_customer_groups(&self.client, &token, &keyword)
             .await
             .map_err(api_error)?;
-        Ok(json_result(value))
+        // 后端把行数组放在 data.data
+        let empty = json!([]);
+        let rows = value.pointer("/data/data").unwrap_or(&empty);
+        Ok(json_result(keep_fields_array(rows, CUSTOMER_GROUP_KEEP)))
     }
 
     #[tool(
-        description = "按关键字模糊搜索人员；返回 userId 与 psnName。提单人(create_ticket 的 requestor)与支持人(support_by)均用本工具查询。",
+        description = "按姓名/工号模糊搜索人员，返回 userId/psnName/depName/mail（供 create_ticket 的 requestor/support_by）。",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
     )]
     async fn search_base_persons(
@@ -381,11 +486,14 @@ impl ItsmHandler {
         let value = api::search_base_persons(&self.client, &token, &keyword)
             .await
             .map_err(api_error)?;
-        Ok(json_result(value))
+        // 后端把行数组放在 data.data
+        let empty = json!([]);
+        let rows = value.pointer("/data/data").unwrap_or(&empty);
+        Ok(json_result(keep_fields_array(rows, PERSON_KEEP)))
     }
 
     #[tool(
-        description = "列出全部支持组；返回 sgId 与 supportGroupName，作为 create_ticket 的 assign / assign_name（也可不传 assign 走应用默认支持组）。",
+        description = "列出支持组，返回 sgId/supportGroupName（供 create_ticket 的 assign；不传则走应用默认支持组）。",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
     )]
     async fn list_support_groups(&self) -> Result<CallToolResult, McpError> {
@@ -393,11 +501,13 @@ impl ItsmHandler {
         let value = api::list_support_groups(&self.client, &token)
             .await
             .map_err(api_error)?;
-        Ok(json_result(value))
+        let empty = json!([]);
+        let rows = value.get("data").unwrap_or(&empty);
+        Ok(json_result(keep_fields_array(rows, SUPPORT_GROUP_KEEP)))
     }
 
     #[tool(
-        description = "按工单号或主题关键字，在指定 seachType 视图中模糊搜索工单。返回 data、count、page_index、page_size。",
+        description = "按工单号或主题关键字模糊搜索工单，返回精简字段列表（完整信息用 get_detail）。",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -428,7 +538,7 @@ impl ItsmHandler {
         .await
         .map_err(fetch_error)?;
         Ok(json_result(json!({
-            "data": data,
+            "data": keep_fields_array(&data, TICKET_ROW_KEEP),
             "count": count,
             "seach_type": seach_type,
             "page_index": page_index,
@@ -437,7 +547,7 @@ impl ItsmHandler {
     }
 
     #[tool(
-        description = "按客户组名称关键字，在指定 seachType 视图中模糊搜索工单。返回 data、count、page_index、page_size。",
+        description = "按客户组名称关键字模糊搜索工单，返回精简字段列表（完整信息用 get_detail）。",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -468,7 +578,7 @@ impl ItsmHandler {
         .await
         .map_err(fetch_error)?;
         Ok(json_result(json!({
-            "data": data,
+            "data": keep_fields_array(&data, TICKET_ROW_KEEP),
             "count": count,
             "seach_type": seach_type,
             "page_index": page_index,
@@ -477,7 +587,7 @@ impl ItsmHandler {
     }
 
     #[tool(
-        description = "按 incidentId 读取工单核心详情（精简字段，不含表单模板）。参数 id 必须是 incidentId，不是展示单号；展示单号请用 get_ticket_by_code。",
+        description = "按 incidentId 读取工单核心详情（精简字段，不含表单模板）。id 必须是 incidentId，不是展示单号 incidentCode；展示单号用 get_ticket_by_code。",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -515,13 +625,14 @@ impl ItsmHandler {
         let value = api::list_replies(&self.client, &token, &incident_id)
             .await
             .map_err(api_error)?;
-        let replies = value.get("data").cloned().unwrap_or(Value::Array(vec![]));
+        let empty = json!([]);
+        let replies = keep_fields_array(value.get("data").unwrap_or(&empty), REPLY_KEEP);
         let count = replies.as_array().map(|a| a.len()).unwrap_or(0);
         Ok(json_result(json!({ "replies": replies, "count": count })))
     }
 
     #[tool(
-        description = "按展示单号(incidentCode，如 IM26070065)一步返回工单核心详情与历史回复。内部：缺省视图搜 code → incidentId → 并发取详情与回复。命中多条时取首条并附 hint。",
+        description = "按展示单号(incidentCode，如 IM26070065)一步返回工单详情与历史回复。内部：缺省视图搜 code → incidentId → 并发取详情与回复；命中多条取首条并附 hint。",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -570,11 +681,9 @@ impl ItsmHandler {
             api::list_replies(&self.client, &token, &incident_id),
         );
         let detail = pick_detail_fields(&detail_res.map_err(api_error)?);
-        let replies = replies_res
-            .map_err(api_error)?
-            .get("data")
-            .cloned()
-            .unwrap_or(Value::Array(vec![]));
+        let empty = json!([]);
+        let replies_value = replies_res.map_err(api_error)?;
+        let replies = keep_fields_array(replies_value.get("data").unwrap_or(&empty), REPLY_KEEP);
         let mut result = serde_json::Map::new();
         result.insert("count".into(), json!(count));
         result.insert("incident_id".into(), json!(incident_id));
@@ -591,7 +700,7 @@ impl ItsmHandler {
     }
 
     #[tool(
-        description = "回复工单。本工具只追加回复，不改工单状态；如需变更状态请用 resolve / unhang 等。首版不上传附件，fileIds 固定为空；本操作会修改真实 ITSM 工单。",
+        description = "回复工单（只追加回复不改状态，不传附件；改状态用 resolve/suspend/unhang）。写操作，会修改真实工单。",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -625,7 +734,7 @@ impl ItsmHandler {
     }
 
     #[tool(
-        description = "暂挂工单并记录暂挂原因；本操作会修改真实 ITSM 工单。",
+        description = "暂挂工单并记录原因。写操作，会修改真实工单。",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -647,7 +756,7 @@ impl ItsmHandler {
     }
 
     #[tool(
-        description = "解除工单暂挂；本操作会修改真实 ITSM 工单。",
+        description = "解除工单暂挂。写操作，会修改真实工单。",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -668,7 +777,7 @@ impl ItsmHandler {
     }
 
     #[tool(
-        description = "将工单状态改为 Resolved 并写入解决方案；本操作会修改真实 ITSM 工单。",
+        description = "将工单置为 Resolved 并写解决方案。写操作，会修改真实工单。",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -690,7 +799,7 @@ impl ItsmHandler {
     }
 
     #[tool(
-        description = "补单：代提一个新工单。本操作会在真实 ITSM 建立工单。建议流程：list_service_tree 取 service_type/service_sub_type → get_replenish_template 取 create_template_id → search_customer_groups 取 contact_customer_group(+name) → search_base_persons 取 requestor(+name)，可选 support_by(+name) → 调用本工具建单 → get_detail(data 的 incidentId) 取展示单号 incidentCode。返回 code==800 时 data 为新单 incidentId；否则后端 msg 透传。",
+        description = "补单：代提新工单。流程：list_service_tree 取 service_type/service_sub_type → get_replenish_template 取 create_template_id → search_customer_groups / search_base_persons 取客户组与人员 → 本工具建单。返回 code==800 时 data 为新单 incidentId，用 get_detail 取展示单号。写操作，会修改真实工单。",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true)
     )]
     async fn create_ticket(
@@ -793,11 +902,74 @@ mod tests {
 
     #[test]
     fn pagination_defaults_and_validates() {
-        assert_eq!(pagination(None, None).unwrap(), (1, 50));
+        assert_eq!(pagination(None, None).unwrap(), (1, 20));
         assert_eq!(pagination(Some(2), Some(100)).unwrap(), (2, 100));
         assert!(pagination(Some(0), Some(50)).is_err());
         assert!(pagination(Some(1), Some(0)).is_err());
         assert!(pagination(Some(1), Some(201)).is_err());
+    }
+
+    #[test]
+    fn keep_fields_drops_null_and_unknown_keys() {
+        let obj = json!({"incidentId": "1", "statusName": null, "extField1": "x"});
+        let picked = keep_fields(obj.as_object().unwrap(), &["incidentId", "statusName"]);
+        assert_eq!(picked, json!({"incidentId": "1"}));
+    }
+
+    #[test]
+    fn keep_fields_array_tolerates_non_array() {
+        assert_eq!(keep_fields_array(&json!({"a": 1}), TICKET_ROW_KEEP), json!([]));
+    }
+
+    #[test]
+    fn pick_ticket_rows_keeps_whitelist_only() {
+        let rows = json!([
+            {"incidentId": "880", "incidentCode": "IM1", "orderSubject": "s", "statusName": "处理中", "detail": "<p>很长正文</p>", "extField27": null, "slaId": "x"}
+        ]);
+        let picked = keep_fields_array(&rows, TICKET_ROW_KEEP);
+        assert_eq!(
+            picked,
+            json!([{"incidentId": "880", "incidentCode": "IM1", "orderSubject": "s", "statusName": "处理中"}])
+        );
+    }
+
+    #[test]
+    fn pick_detail_fields_skips_null() {
+        let raw = json!({"data": {"incidentId": "880", "solution": null, "closeTime": null, "extField1": "drop"}, "code": 800});
+        let picked = pick_detail_fields(&raw);
+        assert_eq!(picked, json!({"incidentId": "880"}));
+    }
+
+    #[test]
+    fn pick_service_tree_trims_levels() {
+        let raw = json!({"data": [
+            {"code": "1", "name": "软件服务", "nameLang": "{}", "serviceType": [
+                {"stId": "ST1", "typeName": "SMOM", "typeCode": "FWLX", "extField1": "", "children": [
+                    {"stId": "SST1", "typeName": "BUG问题", "deleteFlag": 0, "children": null}
+                ]}
+            ]},
+            {"code": "2", "name": "桌面服务", "serviceType": []}
+        ]});
+        assert_eq!(
+            pick_service_tree(&raw),
+            json!({"data": [
+                {"name": "软件服务", "serviceType": [
+                    {"stId": "ST1", "typeName": "SMOM", "children": [{"stId": "SST1", "typeName": "BUG问题"}]}
+                ]},
+                {"name": "桌面服务", "serviceType": []}
+            ]})
+        );
+    }
+
+    #[test]
+    fn pick_replies_keeps_core_fields() {
+        let raw = json!({"data": [
+            {"userName": "A", "replyTime": "2026-01-01", "detail": "d", "isPrivate": 1, "fileList": [], "operationSource": "ITSM_SYSTEM", "escId": null}
+        ]});
+        assert_eq!(
+            keep_fields_array(raw.get("data").unwrap(), REPLY_KEEP),
+            json!([{"userName": "A", "replyTime": "2026-01-01", "detail": "d", "isPrivate": 1}])
+        );
     }
 
     #[test]
