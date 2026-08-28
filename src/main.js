@@ -1803,8 +1803,8 @@ listen('need-login', async () => {
   try { cfg = await invoke('get_config', { seachType: currentSeachType }); } catch (e) {}
   if (cfg.auto_login_enabled && !gaveUpActive()) {
     startAutoLogin('silent-runtime');
-  } else {
-    showLogin();   // 放弃过/未开启 → 手动登录页
+  } else if ($('login-screen').hidden) {
+    showLogin();   // 放弃过/未开启 → 手动登录页（已可见则跳过：scheduler 每轮都会 emit，避免清 tip/重置勾选）
   }
 });
 
